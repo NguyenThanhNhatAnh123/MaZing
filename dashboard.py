@@ -20,10 +20,10 @@ import time
 import traceback
 import zipfile
 from datetime import timedelta
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from pathlib import Path
 
-from flask import Flask, abort, g, jsonify, request, send_file, session
+from flask import Flask, abort, g, jsonify, redirect, render_template_string, request, send_file, session
 from flask.sessions import SecureCookieSessionInterface
 from werkzeug.local import LocalProxy
 
@@ -31,13 +31,18 @@ import config
 from lib import manifest, mayzing, ocr, review, product_defaults, slug as slugs
 from lib.browser_bridge import BRIDGE, DEFAULT_BRIDGE, BrowserBridge, BridgeError
 from lib.context import BRIDGE_GENERATION, RUNTIME, WORKSPACE_ID, bind_context
+from lib.web_auth import SESSION_SECONDS, WebAuth
 
 config.ensure_dirs()
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 app.config.update(SECRET_KEY=config.session_secret(), SESSION_COOKIE_NAME="mayzing_device",
                   SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
-                  PERMANENT_SESSION_LIFETIME=timedelta(days=30))
+                  SESSION_REFRESH_EACH_REQUEST=False,
+                  PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+                  REQUIRE_LOCAL_LOGIN=os.environ.get("MAYZING_REQUIRE_LOCAL_LOGIN") == "1")
+WEB_AUTH = WebAuth(config.BASE_DATA_ROOT, app.config["SECRET_KEY"])
+LOGIN_COOKIE = "mayzing_login"
 
 
 class DeviceSessionInterface(SecureCookieSessionInterface):
@@ -50,6 +55,7 @@ log = logging.getLogger("dashboard")
 _default_review = review.Review()
 REVIEW = LocalProxy(lambda: RUNTIME.get().review if RUNTIME.get() is not None else _default_review)
 PAGE = Path(__file__).resolve().parent / "lib" / "dashboard.html"
+LOGIN_PAGE = config.ROOT / "lib" / "login.html"
 GUIDE_PAGE = config.ROOT / "lib" / "huongdan.html"
 GUIDE_VIDEO = config.ROOT / "assets" / "huong-dan-cai-extension-developer-mode.mp4"
 BTHUMB_DIR = config.WORK_DIR / "batch_thumbs"
@@ -160,7 +166,40 @@ _active_mutation_requests = 0
 _extension_client_paths = {"/api/bridge/pair", "/api/bridge/poll", "/api/bridge/heartbeat",
                            "/api/bridge/result", "/api/bridge/disconnect"}
 _public_paths = {"/api/health", "/api/huongdan", "/api/huongdan/", "/api/huongdan/video.mp4",
-                 "/api/huongdan/extension.zip", "/api/bridge/extension.zip"}
+                 "/api/huongdan/extension.zip", "/api/bridge/extension.zip", "/login"}
+
+
+def _login_required():
+    return request.host.lower() == config.PUBLIC_HOST or app.config["REQUIRE_LOCAL_LOGIN"]
+
+
+def _safe_next(value):
+    # Only same-site paths; reject backslashes and control characters as well.
+    value = str(value or "/")
+    if (not value.startswith("/") or value.startswith("//") or "\\" in value
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            or urlsplit(value).path in ("/login", "/logout")):
+        return "/"
+    return value
+
+
+def _csrf_token():
+    if not session.get("csrf_token"):
+        session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
+
+
+def _valid_csrf(value):
+    expected = session.get("csrf_token", "")
+    return (isinstance(value, str) and value.isascii() and bool(expected)
+            and hmac.compare_digest(value, expected))
+
+
+def _auth_required_response():
+    if request.path.startswith("/api/") or request.path == "/logout":
+        return jsonify({"error": "Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.",
+                        "auth_required": True, "login": "/login"}), 401
+    return redirect("/login?" + urlencode({"next": _safe_next(request.full_path.rstrip("?"))}))
 
 
 def _bind_runtime(runtime):
@@ -214,7 +253,7 @@ def bind_device_request():
     extension = bool(re.fullmatch(r"chrome-extension://[a-p]{32}", origin))
     extension_path = request.path in _extension_client_paths
     if request.method not in ("GET", "HEAD", "OPTIONS"):
-        if public and not request.is_json and request.path != "/api/inputs":
+        if public and not request.is_json and request.path not in ("/api/inputs", "/login"):
             abort(415)
         if request.is_json and not isinstance(request.get_json(silent=True), dict):
             abort(400)
@@ -238,7 +277,7 @@ def bind_device_request():
                 g.counted_mutation = True
             if config.DRAIN_FILE.exists():
                 return jsonify({"error": "Đang cập nhật ứng dụng. Chờ một chút rồi thử lại."}), 503
-    if not public or request.path in _public_paths:
+    if not _login_required() or request.path in _public_paths:
         return
     if extension_path:
         # Extensions intentionally omit dashboard cookies: bind by single-use code or bearer.
@@ -265,20 +304,28 @@ def bind_device_request():
         return
     if extension:
         abort(403)
-    workspace_id = session.get("workspace_id", "")
-    if not isinstance(workspace_id, str) or not re.fullmatch(r"[a-f0-9]{32}", workspace_id):
-        workspace_id = secrets.token_hex(16)
-        session.clear()
-        session["workspace_id"] = workspace_id
-        session.permanent = True
+    login = WEB_AUTH.get_session(request.cookies.get(LOGIN_COOKIE, ""))
+    if login is None:
+        return _auth_required_response()
+    # The authenticated session owns its browser workspace, independently of a
+    # copied or cleared device cookie. Shared credentials never merge devices.
+    workspace_id = login["workspace_id"]
+    session["workspace_id"] = workspace_id
+    session["login_identity"] = WEB_AUTH.identity()
+    session.permanent = True
+    g.login_session = login
     _bind_runtime(_device_runtime(workspace_id))
 
 
 @app.after_request
 def private_response(response):
-    if RUNTIME.get() is not None or request.path.startswith("/api/bridge/") or request.path == "/api/health":
+    if (RUNTIME.get() is not None or request.path.startswith("/api/")
+            or request.path in ("/", "/login", "/logout")):
         response.headers["Cache-Control"] = "private, no-store"
         response.vary.add("Cookie")
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
     return response
 
 
@@ -351,6 +398,73 @@ def origin_names() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 # pages + info
 # ---------------------------------------------------------------------------
+@app.route("/login", methods=["GET", "POST"])
+def web_login():
+    next_path = _safe_next(request.values.get("next", "/"))
+    if WEB_AUTH.get_session(request.cookies.get(LOGIN_COOKIE, "")) is not None:
+        return redirect(next_path)
+    credentials = WEB_AUTH.credentials()
+    error, status = "", 200 if credentials else 503
+    if request.method == "POST":
+        if not _valid_csrf(request.form.get("csrf_token")):
+            error, status = "Phiên trang đã hết hạn. Tải lại và thử lại.", 400
+        elif credentials:
+            # Origin is loopback-only behind the tunnel. Do not trust forwarded
+            # addresses supplied by arbitrary clients for security decisions.
+            key = request.remote_addr or "unknown"
+            identity = WEB_AUTH.identity()
+            if not WEB_AUTH.allow_attempt(key):
+                error, status = "Thử lại sau 15 phút.", 429
+            elif WEB_AUTH.authenticate(request.form.get("username", ""), request.form.get("password", "")):
+                WEB_AUTH.clear_attempts(key)
+                if WEB_AUTH.identity() != identity:
+                    abort(503)
+                workspace_id = session.get("workspace_id", "")
+                if (not isinstance(workspace_id, str) or not re.fullmatch(r"[a-f0-9]{32}", workspace_id)
+                        or session.get("login_identity", identity) != identity):
+                    workspace_id = secrets.token_hex(16)
+                token = WEB_AUTH.create_session(workspace_id)
+                if WEB_AUTH.identity() != identity:
+                    WEB_AUTH.revoke_session(token)
+                    abort(503)
+                session.clear()
+                session.update(workspace_id=workspace_id, login_identity=identity,
+                               csrf_token=secrets.token_urlsafe(32))
+                session.permanent = True
+                response = redirect(next_path, code=303)
+                response.set_cookie(LOGIN_COOKIE, token, max_age=SESSION_SECONDS,
+                                    secure=request.host.lower() == config.PUBLIC_HOST,
+                                    httponly=True, samesite="Lax", path="/")
+                return response
+            else:
+                WEB_AUTH.failed_attempt(key)
+                error, status = "Tài khoản hoặc mật khẩu không đúng.", 401
+    return render_template_string(LOGIN_PAGE.read_text(encoding="utf-8"),
+                                  username_required=bool(credentials and credentials.username),
+                                  configured=credentials is not None, error=error,
+                                  csrf_token=_csrf_token(), next_path=next_path), status
+
+
+@app.post("/logout")
+def web_logout():
+    body = request.get_json(silent=True) or {}
+    if not _valid_csrf(body.get("csrf_token")):
+        abort(403)
+    # Do not interrupt an upload or a synchronous bridge command to sign out.
+    with JOB.lock, BRIDGE.cv:
+        if JOB.running or BRIDGE.commands:
+            return jsonify({"error": "Chờ công việc đang chạy hoàn tất rồi đăng xuất."}), 409
+        BRIDGE.disconnect()
+        BRIDGE.code = ""
+        BRIDGE.code_expires = 0.0
+    WEB_AUTH.revoke_session(request.cookies.get(LOGIN_COOKIE, ""))
+    session["csrf_token"] = secrets.token_urlsafe(32)
+    response = jsonify({"ok": True, "login": "/login"})
+    response.delete_cookie(LOGIN_COOKIE, secure=request.host.lower() == config.PUBLIC_HOST,
+                           httponly=True, samesite="Lax", path="/")
+    return response
+
+
 @app.get("/")
 def index():
     return send_file(PAGE)
@@ -389,6 +503,8 @@ def api_info():
     if config.FORBIDDEN_WORDS:
         rules.append("xoá: " + ", ".join(config.FORBIDDEN_WORDS))
     return jsonify({
+        "auth": {"enabled": _login_required(),
+                 "csrf_token": _csrf_token() if _login_required() else ""},
         "settings": settings,
         "ocr": {"available": ok, "label": why},
         "session": {"file": mayzing.has_session_file(), **_session},

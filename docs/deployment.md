@@ -1,5 +1,31 @@
 # Production at mz.eagleglobal2023.com
 
+## Dashboard login
+
+The public dashboard requires the shared MaZing account. Login sessions last
+30 days from sign-in, survive releases/restarts, and are revoked on logout or
+credential changes. The `mayzing_login` cookie contains an opaque token with
+Secure, HttpOnly and SameSite=Lax; passwords and shop cookies never enter it.
+Each browser keeps its own workspace even when the team shares one account.
+Health, the connection guide and extension downloads remain public; the
+extension's paired bearer channel still works without dashboard cookies.
+
+Provision credentials once on the host (outside release directories):
+
+```powershell
+python deploy/configure-login.py
+# To use the existing PodSach account on this host:
+python deploy/configure-login.py --from-podsach-env F:\PodSach\.env
+```
+
+Only a password hash is written to `auth/web-login.json`; never commit it or
+`auth/web-sessions.sqlite3`. Re-run the command when changing the account.
+This copies the current PodSach credentials; later PodSach changes require
+running the command again. Missing credentials deny access to protected routes.
+Loopback access stays available for host tools; set `MAYZING_REQUIRE_LOCAL_LOGIN=1`
+to require login there as well. Logout waits for a running job to finish, then
+revokes that browser's session and disconnects its extension.
+
 Cloudflare Tunnel `office-qa` routes `mz.eagleglobal2023.com` to
 `http://127.0.0.1:8780`. Keep this origin loopback-only. The production process
 uses Waitress; customers connect their own Chrome extension over the public HTTPS

@@ -17,6 +17,7 @@
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font); font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased; }
   a { color: inherit; }
@@ -250,6 +251,7 @@
     <div class="kv"><span>Session</span><code id="i-auth">…</code></div>
 
     <div class="spacer"></div>
+    <button class="btn ghost sm" id="logout" hidden>Đăng xuất</button>
     <div class="hint">Tab Duyệt: <kbd>A</kbd> duyệt <kbd>R</kbd> loại <kbd>J</kbd>/<kbd>K</kbd> thẻ kế/trước <kbd>E</kbd> sửa</div>
   </aside>
 
@@ -464,6 +466,10 @@
     let data = {};
     try { data = await r.json(); } catch (e) { data = {error: `Máy chủ trả HTTP ${r.status}, không phải JSON. Kiểm tra kết nối hoặc tải lại dashboard.`}; }
     if (!data || typeof data !== "object" || Array.isArray(data)) data = {error: "Phản hồi dashboard không hợp lệ (HTTP " + r.status + ")."};
+    if (r.status === 401 && data.auth_required) {
+      location.replace("/login?next=" + encodeURIComponent(location.pathname + location.search));
+      return data;
+    }
     if (!r.ok && !data.error) data.error = "HTTP " + r.status;
     return data;
   }
@@ -475,6 +481,15 @@
     if (v) { pill.className = "pill err"; pill.lastElementChild.textContent = "mất kết nối dashboard"; toast("Mất kết nối với dashboard. Kiểm tra mạng rồi tải lại trang (F5).", 8000); }
   }
   function toast(msg, ms = 2400) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), ms); }
+  $("#logout").onclick = async () => {
+    $("#logout").disabled = true;
+    const result = await api("/logout", {csrf_token: INFO.auth?.csrf_token || ""});
+    if (result.ok) location.replace("/login");
+    else {
+      $("#logout").disabled = false;
+      toast(result.error || "Chưa đăng xuất được.");
+    }
+  };
   function modal(html, onOk, okLabel = "Đồng ý", danger = false) {
     $("#modal").innerHTML = html + `<div class="row"><button class="btn" id="m-cancel">Quay lại</button>${onOk ? `<button class="btn ${danger ? "bad" : "primary"}" id="m-ok">${okLabel}</button>` : ""}</div>`;
     $("#overlay").classList.add("show");
@@ -546,6 +561,7 @@
   setInterval(pollBridge, 3000);
   async function loadInfo() {
     INFO = await api("api/info");
+    $("#logout").hidden = !INFO.auth?.enabled;
     renderInfo();
   }
   function renderInfo() {

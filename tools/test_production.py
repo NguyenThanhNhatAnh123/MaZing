@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -14,6 +15,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
+from werkzeug.security import generate_password_hash
 
 from PIL import Image
 
@@ -22,6 +24,7 @@ import config
 import dashboard
 from lib import mayzing, ocr, review
 from lib.context import WORKSPACE_ID
+from lib.web_auth import WebAuth
 
 
 PROD = "https://mz.eagleglobal2023.com"
@@ -31,6 +34,11 @@ READY = {"ready": True, "message": "Ready", "extensionVersion": "1.2.0"}
 
 class ProductionTests(unittest.TestCase):
     def setUp(self):
+        environment = patch.dict(os.environ)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("MAYZING_WEB_USER", None)
+        os.environ.pop("MAYZING_WEB_PASSWORD_HASH", None)
         self.folder = tempfile.TemporaryDirectory(prefix="mayzing_production_test_")
         self.addCleanup(self.folder.cleanup)
         self.root = Path(self.folder.name)
@@ -44,10 +52,29 @@ class ProductionTests(unittest.TestCase):
         previous_secret = dashboard.app.secret_key
         dashboard.app.secret_key = "offline-production-test-key"
         self.addCleanup(setattr, dashboard.app, "secret_key", previous_secret)
+        credential_path = self.root / "auth" / "web-login.json"
+        credential_path.parent.mkdir()
+        credential_path.write_text(json.dumps({"username": "offline-team", "password_hash":
+            generate_password_hash("offline-password", method="pbkdf2:sha256:1000")}), encoding="utf-8")
+        auth_change = patch.object(dashboard, "WEB_AUTH", WebAuth(self.root, dashboard.app.secret_key))
+        auth_change.start()
+        self.addCleanup(auth_change.stop)
         dashboard.DEVICE_RUNTIMES.clear()
         self.addCleanup(dashboard.DEVICE_RUNTIMES.clear)
         self.a = dashboard.app.test_client()
         self.b = dashboard.app.test_client()
+        self.login(self.a)
+        self.login(self.b)
+
+    def login(self, client):
+        response = self.get(client, "/login")
+        self.assertEqual(response.status_code, 200)
+        with client.session_transaction(base_url=PROD) as cookie:
+            csrf = cookie["csrf_token"]
+        response = client.post("/login", base_url=PROD, headers={"Origin": PROD},
+                               data={"username": "offline-team", "password": "offline-password",
+                                     "csrf_token": csrf})
+        self.assertEqual(response.status_code, 303)
 
     def get(self, client, path):
         return client.get(path, base_url=PROD)
@@ -441,6 +468,8 @@ class ProductionTests(unittest.TestCase):
         self.post(self.a, "/api/settings", {"extra_tags": ["private-a"]})
         owner = self.info(self.a)["workspace_id"]
         anonymous = dashboard.app.test_client()
+        self.assertEqual(self.get(anonymous, "/api/info").status_code, 401)
+        self.login(anonymous)
         empty = self.info(anonymous)
         self.assertNotEqual(empty["workspace_id"], owner)
         self.assertEqual(empty["settings"]["extra_tags"], [])
@@ -448,6 +477,8 @@ class ProductionTests(unittest.TestCase):
         name = dashboard.app.config["SESSION_COOKIE_NAME"]
         forged = dashboard.app.test_client()
         forged.set_cookie(name, owner, domain="mz.eagleglobal2023.com")
+        self.assertEqual(self.get(forged, "/api/info").status_code, 401)
+        self.login(forged)
         info = self.info(forged)
         self.assertNotEqual(info["workspace_id"], owner)
         self.assertNotEqual(info["workspace_id"], "")
