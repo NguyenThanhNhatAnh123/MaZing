@@ -44,10 +44,12 @@ Set-Location F:\Mayzing
 ```
 
 This prepares a release and registers the `MaZingProduction` task as SYSTEM at
-Windows startup. It leaves the existing server running. Stop **only the verified
-old MaZing dashboard process** currently listening on port 8780, then:
+Windows startup. With `-NoStart`, the task stays disabled so its watchdog cannot
+start before migration; the existing server keeps running. Stop **only the
+verified old MaZing dashboard process** currently listening on port 8780, then:
 
 ```powershell
+Enable-ScheduledTask -TaskName 'MaZingProduction'
 Start-ScheduledTask -TaskName 'MaZingProduction'
 Invoke-RestMethod http://127.0.0.1:8780/api/health
 Invoke-RestMethod https://mz.eagleglobal2023.com/api/health
@@ -62,6 +64,13 @@ This host is installed with `-RunAsCurrentUser`: `MaZingProduction` starts at
 Windows sign-in and is already running in the current session. Signing out stops
 availability; locking the desktop keeps it running. Switching to startup before
 sign-in requires reinstalling the task as SYSTEM from an Administrator shell.
+
+The scheduled action uses `pythonw.exe` beside the configured `python.exe`, so it
+has no console window. Release preparation still uses `python.exe`. A second
+trigger runs every minute indefinitely; `IgnoreNew` skips it while the supervisor
+is running and starts the task again after an unexpected exit. The supervisor's
+own file log remains available without console output. This watchdog requires
+the task to be enabled and, in current-user mode, the user to remain signed in.
 
 After a production update, clients should reload their dashboard. For the
 multi-device release, download extension **1.2.0** from `/api/huongdan`, extract
@@ -100,6 +109,21 @@ Get-Content F:\Mayzing\work\deployment\state.json
 Get-Content F:\Mayzing\work\deployment\logs\supervisor.log -Tail 40
 ```
 
+To apply the windowless action and one-minute watchdog to an existing installation
+without downloading a release or stopping its running server:
+
+```powershell
+.\deploy\update-task.ps1 -WhatIf
+.\deploy\update-task.ps1
+```
+
+This preserves the task's principal and enabled state. The running process keeps
+serving; its next launch uses `pythonw.exe`. On 4 November 2026, the stopped task
+reported `0xC000013A` (console interrupt). The origin had stopped while Cloudflare
+Tunnel remained running, causing HTTP 502. That exit code does not identify who
+or what sent the interrupt; windowless startup and the watchdog address the
+console dependency and missing automatic recovery.
+
 An update or server restart disconnects in-memory extension sessions. Reconnect
 the shop using a new pairing code if the extension requests it. Existing user
 files and completed campaign state persist. The supervisor never automatically
@@ -108,15 +132,18 @@ resends a Mayzing mutation after a restart.
 To pause automatic updates while keeping the current server online, create an
 empty `work\deployment\paused` file. Remove it to resume normal update checks.
 Stopping the scheduled task also stops its WSGI child; the Windows job object
-prevents an orphan from continuing on the port.
+prevents an orphan from continuing on the port. Disable the task before planned
+maintenance, otherwise the one-minute watchdog can start it again. Enable it
+after maintenance and start it explicitly to resume service immediately.
 
-For a manual rollback, stop the task when jobs are idle, change only `current` in
+For a manual rollback, disable and stop the task when jobs are idle, change only `current` in
 `work\deployment\state.json` to the retained `previous` SHA, and start the task.
 Set `failed` to the unwanted SHA so it is not redeployed. Do not remove data files.
 To retry that same SHA after an infrastructure fix, clear `failed` in `state.json`
-while the task is stopped. A code fix should normally use a new commit.
+while the task is stopped. Enable and start the task after editing state. A code
+fix should normally use a new commit.
 
-The installed supervisor is stable infrastructure. To upgrade it, stop the task
+The installed supervisor is stable infrastructure. To upgrade it, disable and stop the task
 when jobs are idle, copy the reviewed `deploy\supervisor.py` to
-`work\deployment\supervisor.py`, and start the task again. Application commits
+`work\deployment\supervisor.py`, then enable and start the task again. Application commits
 are delivered automatically by the installed supervisor.

@@ -373,7 +373,9 @@ class Supervisor:
         # Recover a drain marker left by an interrupted supervisor. The next
         # deployment creates its own marker after a fresh health check.
         self.drain.unlink(missing_ok=True)
+        logging.info("Supervisor started pid=%s release=%s", os.getpid(), self.state["current"])
         self.start(self.state["current"])
+        next_check = 0.0
         try:
             while not STOP.is_set():
                 try:
@@ -381,15 +383,21 @@ class Supervisor:
                         logging.warning("Managed server stopped; restarting current release.")
                         self.stop()
                         self.start(self.state["current"])
-                    sha = None if (self.root / "paused").exists() else candidate(
-                        self.settings["repository"], self.settings["branch"])
-                    if sha and sha not in (self.state.get("current"), self.state.get("failed")):
-                        logging.info("Preparing CI-approved release %s", sha)
-                        self.deploy(sha)
+                    now = time.monotonic()
+                    if now >= next_check:
+                        # Process recovery is independent of the slower GitHub polling
+                        # interval and continues even when GitHub is unavailable.
+                        next_check = now + max(300, self.settings.get("interval", 300))
+                        sha = None if (self.root / "paused").exists() else candidate(
+                            self.settings["repository"], self.settings["branch"])
+                        if sha and sha not in (self.state.get("current"), self.state.get("failed")):
+                            logging.info("Preparing CI-approved release %s", sha)
+                            self.deploy(sha)
                 except Exception:
-                    logging.exception("Update check failed; retaining current release.")
-                STOP.wait(max(300, self.settings.get("interval", 300)))
+                    logging.exception("Production supervision check failed; retaining current release.")
+                STOP.wait(5)
         finally:
+            logging.warning("Supervisor stopping pid=%s; closing managed server.", os.getpid())
             self.stop()
             self.job.close()
             self.drain.unlink(missing_ok=True)
@@ -421,9 +429,10 @@ def main() -> None:
     args = parser.parse_args()
     root = args.root.resolve()
     (root / "logs").mkdir(parents=True, exist_ok=True)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s",
-                        handlers=[logging.FileHandler(root / "logs" / "supervisor.log", encoding="utf-8"),
-                                  logging.StreamHandler()])
+    handlers = [logging.FileHandler(root / "logs" / "supervisor.log", encoding="utf-8")]
+    if sys.stderr is not None:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s", handlers=handlers)
     settings = json.loads((root / "settings.json").read_text(encoding="utf-8"))
     if not REPOSITORY.fullmatch(settings["repository"]) or settings["branch"] != "main":
         raise SystemExit("Only a configured repository's default main branch is supported.")
@@ -442,12 +451,20 @@ def main() -> None:
                 write_json(existing, {"current": args.prepare, "previous": None, "failed": None})
             logging.info("Initial release prepared; port %s has not been touched.", settings["port"])
             return
-        for signum in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(signum, lambda *_: STOP.set())
+        def request_stop(signum, frame):
+            logging.warning("Supervisor received stop signal %s", signum)
+            STOP.set()
+
+        for signum in {signal.SIGINT, signal.SIGTERM, getattr(signal, "SIGBREAK", signal.SIGINT)}:
+            signal.signal(signum, request_stop)
         Supervisor(root, settings).run()
     finally:
         lock.close()
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logging.exception("Deployment supervisor exited unexpectedly.")
+        raise

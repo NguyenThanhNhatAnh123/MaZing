@@ -16,6 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'task-config.ps1')
 $SourceRoot = [IO.Path]::GetFullPath($SourceRoot)
 if (-not $DeploymentRoot) { $DeploymentRoot = Join-Path $SourceRoot 'work\deployment' }
 if (-not $DataRoot) { $DataRoot = $SourceRoot }
@@ -58,27 +59,30 @@ $json = $settings | ConvertTo-Json
 & $Python $controller --root $DeploymentRoot --prepare $InitialCommit
 if ($LASTEXITCODE -ne 0) { throw 'Release preparation failed; the scheduled task was not changed.' }
 
-$arguments = '"{0}" --root "{1}"' -f $controller, $DeploymentRoot
-$action = New-ScheduledTaskAction -Execute $Python -Argument $arguments -WorkingDirectory $DeploymentRoot
+$action = New-MaZingTaskAction -Python $Python -DeploymentRoot $DeploymentRoot
 $taskSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew
+    -RestartCount 20 -RestartInterval (New-TimeSpan -Minutes 1) -MultipleInstances IgnoreNew -Disable
 if ($RunAsCurrentUser) {
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $taskPrincipal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $triggers = New-MaZingTaskTriggers -LogonUser $user
 } else {
     $taskPrincipal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
-    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $triggers = New-MaZingTaskTriggers
 }
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
+Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $triggers `
     -Settings $taskSettings -Principal $taskPrincipal -Description 'MaZing WSGI and CI-gated production deployments' -Force | Out-Null
 
 if (-not $NoStart) {
     $listener = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue
     if ($listener) {
-        throw "Task registered but not started: port $Port is occupied. Stop only the verified old MaZing server, then Start-ScheduledTask -TaskName '$TaskName'."
+        throw "Task registered but disabled: port $Port is occupied. Stop only the verified old MaZing server, then Enable-ScheduledTask and Start-ScheduledTask -TaskName '$TaskName'."
     }
+    Enable-ScheduledTask -TaskName $TaskName | Out-Null
     Start-ScheduledTask -TaskName $TaskName
+}
+if ($NoStart) {
+    Write-Output "Task is disabled so its watchdog cannot start before migration. Enable-ScheduledTask -TaskName '$TaskName' when ready."
 }
 Write-Output "Prepared $InitialCommit. Scheduled task: $TaskName. Logs: $(Join-Path $DeploymentRoot 'logs')"

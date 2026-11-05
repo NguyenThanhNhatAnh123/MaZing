@@ -137,5 +137,23 @@ class RollbackTests(unittest.TestCase):
             self.assertFalse(instance.drain.exists())
 
 
+class MonitoringTests(unittest.TestCase):
+    def test_server_recovery_does_not_wait_for_github_poll_interval(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            instance = RollbackTests().instance(Path(tmp))
+            instance.proc = Mock()
+            instance.proc.poll.side_effect = [None, 1, None]
+            instance.job = Mock()
+            with patch.object(supervisor, "candidate", return_value=SHA1) as poll, \
+                    patch.object(supervisor.time, "monotonic", side_effect=[0, 5, 10]), \
+                    patch.object(supervisor.STOP, "is_set", side_effect=[False, False, False, True]), \
+                    patch.object(supervisor.STOP, "wait", return_value=False) as wait:
+                instance.run()
+            self.assertEqual(instance.start.call_count, 2)
+            self.assertEqual(poll.call_count, 1)
+            self.assertEqual([call.args[0] for call in wait.call_args_list], [5, 5, 5])
+            instance.job.close.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
