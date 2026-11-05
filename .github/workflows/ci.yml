@@ -26,7 +26,7 @@ jobs:
       OCR_ENABLED: "0"
       PYTHONUTF8: "1"
       MAYZING_RELEASE: ${{ github.sha }}
-      MAYZING_DATA_ROOT: ${{ runner.temp }}/mayzing-ci-data
+      MAYZING_DATA_ROOT: work/ci-data
     steps:
       - uses: actions/checkout@v7
         with:
