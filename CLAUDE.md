@@ -11,6 +11,11 @@ the exact HTTPS production origin or loopback HTTP. Production uses signed HttpO
 sessions: bridge, job, review, shop cache and data folders are isolated per browser profile.
 lib/context.py explicitly binds device context into background and OCR worker threads. Never
 resolve device data paths at module import into a fixed Path, or switch module globals per request.
+The public dashboard requires the shared account configured in auth/web-login.json. Opaque,
+revocable login sessions live in auth/web-sessions.sqlite3 and expire 30 days after sign-in.
+Login is independent of shop cookies and per-browser workspaces; never merge devices by account.
+Health, the guide/downloads and the explicitly authenticated extension relay remain accessible
+without a dashboard login cookie. Require the login CSRF token and same-origin POST for logout.
 Cookies remain in Chrome; do not copy profiles, decrypt cookies, enable debugging
 ports, add stealth flags, or solve security challenges.
 
@@ -64,6 +69,7 @@ dashboard.py + lib/dashboard.html: one background job per device, one process pe
 production.py: threaded Waitress server behind Cloudflare Tunnel.
 deploy/: CI-approved main release supervisor, health checks, drain and rollback.
 lib/browser_bridge.py: paired relay with exactly-once dispatch.
+lib/web_auth.py + lib/login.html: shared-account login, CSRF form and persistent 30-day sessions.
 lib/mayzing.py: fixed API operations and normal Chrome launcher.
 lib/product_defaults.py: product choices and clone type matching.
 lib/artwork.py, lib/ocr.py, lib/titles.py, lib/slug.py, lib/review.py: preparation and review.

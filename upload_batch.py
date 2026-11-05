@@ -66,21 +66,30 @@ def _chunks(rows: list[dict], size: int) -> list[list[dict]]:
     return out
 
 
-def match_new_groups(rows: list[dict], new_groups: list[dict]) -> dict[int, dict]:
-    """{row index in `rows`: group} by name (= the uploaded image name). A single leftover
-    row + a single leftover group are paired as well."""
+def match_new_groups(rows: list[dict], new_groups: list[dict], *, exact_only=False) -> dict[int, dict]:
+    """Match uploaded image names; uncertain task reads require unique exact matches.
+
+    Normal completed tasks retain Mayzing's name-suffix and single-leftover handling.
+    """
     result: dict[int, dict] = {}
     free = list(new_groups)
+    wanted_names = [_norm(r.get("_image_name") or r["title"]) for r in rows]
     for idx, r in enumerate(rows):
-        want = _norm(r.get("_image_name") or r["title"])
-        g = next((g for g in free if _norm(g.get("name")) == want), None)
+        want = wanted_names[idx]
+        matches = [g for g in free if _norm(g.get("name")) == want]
+        if exact_only:
+            if want and wanted_names.count(want) == 1 and len(matches) == 1:
+                result[idx] = matches[0]
+                free.remove(matches[0])
+            continue
+        g = next(iter(matches), None)
         if g is None:
             g = next((g for g in free if _norm(g.get("name")).startswith(want)), None)
         if g is not None:
             result[idx] = g
             free.remove(g)
     left = [i for i in range(len(rows)) if i not in result]
-    if len(left) == 1 and len(free) == 1:
+    if not exact_only and len(left) == 1 and len(free) == 1:
         result[left[0]] = free[0]
     return result
 
@@ -184,6 +193,19 @@ def _run(batch, retry_errors, limit, publish, dry_run, tell, confirm) -> dict:
                 fail(r, f"campaign gốc {origin['slug']} không cho Bulk clone")
                 continue
             r["origin_id"], r["origin_name"] = origin["id"], origin.get("name") or r.get("origin_name", "")
+            if r.get("clone_state") and r.get("group_id"):
+                # Older journals may contain task IDs but no readiness flags.
+                # A resumed clone must still prove it has all inherited products.
+                try:
+                    state = json.loads(r["clone_state"])
+                    if not isinstance(state, dict):
+                        raise ValueError("Invalid clone journal")
+                except (ValueError, TypeError):
+                    fail(r, "nhật ký Bulk clone không hợp lệ; kiểm tra Task log. Tool không tạo lại.")
+                    continue
+                state["require_complete_products"] = True
+                state.setdefault("expected_product_count", len(origin.get("productIds") or []))
+                r["clone_state"] = json.dumps(state, ensure_ascii=False)
             if not r.get('group_id') and not r.get('clone_state'):
                 preference = (settings.get('default_products') or {}).get(origin['id']) or {}
                 r['default_base_product_id'] = preference.get('base_product_id', '') if isinstance(preference, dict) else ''
@@ -291,7 +313,8 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
     # 2) Bulk clone
     before = {g["id"] for g in mz.groups(store)}
     for r in uploaded:
-        r["clone_state"] = json.dumps({"before_ids": sorted(before), "image_name": r["_image_name"]}, ensure_ascii=False)
+        r["clone_state"] = json.dumps({"before_ids": sorted(before), "image_name": r["_image_name"],
+            "expected_product_count": len(origin.get("productIds") or [])}, ensure_ascii=False)
     save()  # Persist before sending: even an uncertain response must not cause a duplicate.
     tell(f"Bulk clone {len(uploaded)} artwork từ /{origin.get('slug')}...")
     try:
@@ -301,23 +324,44 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
             state["task_ids"] = [t["id"] for t in tasks]
             r["clone_state"] = json.dumps(state, ensure_ascii=False)
         save()
-        last_progress = {}
-
-        def progress(t: dict) -> None:
-            p = ((t.get("summary") or {}).get("progress"))
-            if isinstance(p, (int, float)) and p != last_progress.get(t.get("id")):
-                last_progress[t.get("id")] = p
-                tell(f"  task {t.get('id')}: {t.get('status')} {round(p * 100)}%")
-        for task in tasks:
-            task = mz.wait_task(task["id"], on_progress=progress)
-            s = task.get("summary") or {}
-            tell(f"  task {task.get('id')}: {task.get('status')} (thành công {s.get('succeeded')}, lỗi {s.get('failed')})")
     except mayzing.SessionExpired:
         raise
     except mayzing.MayzingError as e:
         for r in uploaded:
             fail(r, f"Bulk clone: {e}")
         return
+
+    # Task-status reads may fail even after the mutation created every campaign.
+    # Keep the submitted journal and inspect the actual groups; never clone again.
+    last_progress = {}
+    status_unavailable = False
+
+    def progress(t: dict) -> None:
+        p = ((t.get("summary") or {}).get("progress"))
+        if isinstance(p, (int, float)) and p != last_progress.get(t.get("id")):
+            last_progress[t.get("id")] = p
+            tell(f"  task {t.get('id')}: {t.get('status')} {round(p * 100)}%")
+
+    for task in tasks:
+        try:
+            result = mz.wait_task(task["id"], on_progress=progress)
+        except mayzing.SessionExpired:
+            raise
+        except mayzing.MayzingError as exc:
+            status_unavailable = True
+            tell(f"  không đọc được trạng thái task {task['id']}: {exc}; đối chiếu campaign đã tạo, không clone lại.",
+                 logging.WARNING)
+            continue
+        s = result.get("summary") or {}
+        tell(f"  task {result.get('id')}: {result.get('status')} (thành công {s.get('succeeded')}, lỗi {s.get('failed')})")
+
+    if status_unavailable:
+        for r in uploaded:
+            state = json.loads(r["clone_state"])
+            state["task_status_unavailable"] = True
+            state["expected_product_count"] = len(origin.get("productIds") or [])
+            r["clone_state"] = json.dumps(state, ensure_ascii=False)
+        save()
 
     # 3) new campaigns
     new_groups: list[dict] = []
@@ -327,7 +371,7 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
         if len(new_groups) >= len(uploaded) or time.time() > deadline:
             break
         time.sleep(config.CLONE_POLL_S)
-    matched = match_new_groups(uploaded, new_groups)
+    matched = match_new_groups(uploaded, new_groups, exact_only=status_unavailable)
     if len(new_groups) and len(matched) < len(uploaded):
         tell("  campaign mới: " + ", ".join(f"{g.get('name')} (/{g.get('slug')})" for g in new_groups))
 
@@ -335,7 +379,7 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
     for idx, r in enumerate(uploaded):
         g = matched.get(idx)
         if g is None:
-            fail(r, "Bulk clone xong nhưng không tìm thấy campaign mới của artwork này - kiểm tra trên Mayzing")
+            fail(r, "Đã gửi Bulk clone nhưng chưa xác định được campaign mới của artwork này; kiểm tra Task log. Tool không tạo lại.")
             continue
         r["group_id"] = g["id"]
         save()
@@ -347,6 +391,13 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
 def _finish_group(mz, store, domain, r, g, extra_tags, tell, fail, save, summary) -> None:
     try:
         g = _wait_ready(mz, store, g)
+        state = json.loads(r.get("clone_state") or "{}")
+        expected = state.get("expected_product_count") or 0
+        if expected or state.get("task_status_unavailable") or state.get("require_complete_products"):
+            products = g.get("productIds") or []
+            if (g.get("processing") is not False or not expected or len(products) != expected
+                    or len(set(products)) != len(products) or not all(products)):
+                raise mayzing.MayzingError("chưa xác nhận campaign đã xử lý đủ sản phẩm; kiểm tra Task log. Tool không clone lại.")
         tags = list(dict.fromkeys([*(g.get("tags") or []), *extra_tags]))
         res = mz.update_group(store, g["id"], r["title"], r["slug"], tags)
         if r.get('default_base_product_id'):

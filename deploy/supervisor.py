@@ -180,15 +180,18 @@ class WindowsChildJob:
                                                         wintypes.DWORD, ctypes.c_void_p]
         self.kernel.CloseHandle.argtypes = [wintypes.HANDLE]
         self.handle = self.kernel.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise ctypes.WinError(ctypes.get_last_error())
         limits = ExtendedLimits()
         limits.basic.flags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not self.handle or not self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
-            raise ctypes.WinError(ctypes.get_last_error())
+        if not self.kernel.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)):
+            error = ctypes.get_last_error()
+            self.close()
+            raise ctypes.WinError(error)
 
     def attach(self, proc: subprocess.Popen) -> None:
         if self.handle and not self.kernel.AssignProcessToJobObject(self.handle, int(proc._handle)):
-            proc.terminate()
-            proc.wait(timeout=15)
+            # Capture the assignment error before any cleanup can overwrite it.
             raise ctypes.WinError(ctypes.get_last_error())
 
     def spawn(self, args: list[str], **kwargs) -> subprocess.Popen:
@@ -204,8 +207,12 @@ class WindowsChildJob:
             self._resume(proc.pid)
             return proc
         except Exception:
-            proc.terminate()
-            proc.wait(timeout=15)
+            try:
+                if proc.poll() is None:
+                    proc.terminate()
+                proc.wait(timeout=15)
+            except Exception:
+                logging.exception("Failed to stop rejected managed process pid=%s", proc.pid)
             raise
 
     def _resume(self, pid: int) -> None:
@@ -291,16 +298,29 @@ class Supervisor:
         release = self.root / "releases" / sha
         if not SHA.fullmatch(sha) or not (release / ".prepared").is_file():
             raise RuntimeError("Refusing to start an unprepared release.")
+        if self.proc is not None:
+            raise RuntimeError("Stop the owned server before starting another release.")
+        # A terminated job may still be completing kernel teardown after its
+        # active count reaches zero. Never assign the next release or rollback
+        # to that old job; every server lifetime gets a fresh ownership boundary.
+        self.job.close()
+        self.job = WindowsChildJob()
         data_root = str(Path(self.settings["data_root"]).resolve())
         env = dict(os.environ, MAYZING_DATA_ROOT=data_root,
                    MAYZING_ENV_FILE=str(Path(data_root) / ".env"), MAYZING_RELEASE=sha,
                    MAYZING_DRAIN_FILE=str(self.drain), PYTHONUTF8="1")
         self.log = (self.root / "logs" / f"server-{sha}.log").open("a", encoding="utf-8")
-        self.proc = self.job.spawn(
-            [str(python_for(release)), str(release / "production.py"), "--port", str(self.settings["port"])],
-            cwd=release, env=env, stdout=self.log, stderr=subprocess.STDOUT,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-        )
+        try:
+            self.proc = self.job.spawn(
+                [str(python_for(release)), str(release / "production.py"), "--port", str(self.settings["port"])],
+                cwd=release, env=env, stdout=self.log, stderr=subprocess.STDOUT,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            )
+        except Exception:
+            self.job.close()
+            self.log.close()
+            self.log = None
+            raise
         end = time.monotonic() + 45
         while time.monotonic() < end and self.proc.poll() is None:
             try:

@@ -16,6 +16,16 @@ from lib import manifest, mayzing
 
 
 class CloneReplyTests(unittest.TestCase):
+    def test_task_error_reconciliation_requires_exact_unique_names(self):
+        rows = [{"title": "A"}, {"title": "B"}]
+        self.assertEqual(upload_batch.match_new_groups(rows,
+            [{"id": "a", "name": "A (1)"}, {"id": "b", "name": "B"}], exact_only=True),
+            {1: {"id": "b", "name": "B"}})
+        self.assertEqual(upload_batch.match_new_groups([{"title": "A"}],
+            [{"id": "a1", "name": "A"}, {"id": "a2", "name": "a"}], exact_only=True), {})
+        self.assertEqual(upload_batch.match_new_groups([{"title": "A"}, {"title": "a"}],
+            [{"id": "a1", "name": "A"}], exact_only=True), {})
+
     def test_all_returned_tasks_are_preserved(self):
         client = mayzing.Mayzing()
         tasks = [{"id": "task-1"}, {"id": "task-2"}]
@@ -52,6 +62,10 @@ class FakeMayzing:
         self.reject_update = False
         self.reject_cover = False
         self.cover_updates = []
+        self.reject_task_reads = False
+        self.clone_processing = False
+        self.incomplete_products = False
+        self.updates = []
 
     def __enter__(self):
         return self
@@ -97,9 +111,12 @@ class FakeMayzing:
         for image_id in image_ids:
             group_id = f"group-{len(self.campaigns)}"
             self.campaigns.append({"id": group_id, "slug": group_id, "name": self.images[image_id], "tags": [],
+                'processing': self.clone_processing,
                 'productIds': [group_id+'-shirt', group_id+'-hoodie'], 'heroProductId': group_id+'-shirt',
                 'products': [{'id': group_id+'-shirt', 'baseProductId': 'shirt'},
                              {'id': group_id+'-hoodie', 'baseProductId': 'hoodie'}]})
+            if self.incomplete_products:
+                self.campaigns[-1]['productIds'].pop()
             tasks.append({"id": f"task-{group_id}"})
         if self.lose_response:
             raise mayzing.SessionExpired("Response lost after clone")
@@ -107,6 +124,8 @@ class FakeMayzing:
 
     def wait_task(self, task_id, on_progress=None):
         self.waited.append(task_id)
+        if self.reject_task_reads:
+            raise mayzing.MayzingError("Internal Server Error")
         return {"id": task_id, "status": "SUCCEEDED", "summary": {"succeeded": 1}}
 
     def update_group(self, store, group_id, name, slug, tags):
@@ -114,6 +133,7 @@ class FakeMayzing:
             raise mayzing.MayzingError("update failed")
         group = next(g for g in self.campaigns if g["id"] == group_id)
         group.update(name=name, slug=slug, tags=tags)
+        self.updates.append(group_id)
         return dict(group)
 
 
@@ -143,6 +163,74 @@ class UploadRecoveryTests(unittest.TestCase):
         self.assertEqual(self.fake.waited, ["task-group-1", "task-group-2"])
         self.assertEqual(self.fake.clone_calls, 1)
         self.assertTrue(all(manifest.is_done(r) for r in manifest.read("batch")))
+
+    def test_status_query_error_reconciles_all_existing_campaigns(self):
+        self.fake.reject_task_reads = True
+        messages = []
+        result = self.run_batch(say=messages.append)
+        self.assertEqual(result["done"], 2)
+        self.assertEqual(result["errors"], 0)
+        self.assertEqual(self.fake.waited, ["task-group-1", "task-group-2"])
+        self.assertEqual(self.fake.clone_calls, 1)
+        self.assertTrue(any("không đọc được trạng thái task" in msg for msg in messages))
+        self.assertFalse(any("Bulk clone: Internal Server Error" in msg for msg in messages))
+        for row in manifest.read("batch"):
+            state = json.loads(row["clone_state"])
+            self.assertEqual(state["task_ids"], ["task-group-1", "task-group-2"])
+            self.assertTrue(state["task_status_unavailable"])
+            self.assertEqual(state["expected_product_count"], 2)
+
+    def test_task_query_error_with_missing_groups_never_reclones(self):
+        self.fake.reject_task_reads = True
+        self.fake.hide_new = True
+        with patch.object(upload_batch, 'time', Mock(time=Mock(side_effect=[0, 61]))):
+            result = self.run_batch()
+        self.assertEqual(result['errors'], 2)
+        self.assertFalse(self.fake.updates)
+        self.assertEqual(self.run_batch(retry_errors=True)['errors'], 2)
+        self.assertEqual(self.fake.clone_calls, 1)
+
+    def test_task_query_error_waits_for_campaign_processing_before_updates(self):
+        self.fake.reject_task_reads = True
+        self.fake.clone_processing = True
+        with patch.object(config, 'GROUP_READY_TIMEOUT_S', 0):
+            self.assertEqual(self.run_batch()['errors'], 2)
+        self.assertFalse(self.fake.updates)
+        for group in self.fake.campaigns:
+            group['processing'] = False
+        self.assertEqual(self.run_batch(retry_errors=True)['done'], 2)
+        self.assertEqual(self.fake.clone_calls, 1)
+
+    def test_task_query_error_does_not_finish_incomplete_products_on_resume(self):
+        self.fake.reject_task_reads = True
+        self.fake.incomplete_products = True
+        self.assertEqual(self.run_batch()['errors'], 2)
+        self.assertFalse(self.fake.updates)
+        self.assertEqual(self.run_batch(retry_errors=True)['errors'], 2)
+        self.assertFalse(self.fake.updates)
+        self.assertEqual(self.fake.clone_calls, 1)
+
+    def test_old_task_journal_requires_complete_products_when_resuming(self):
+        self.fake.lose_response = True
+        self.fake.incomplete_products = True
+        with self.assertRaises(mayzing.SessionExpired):
+            self.run_batch()
+        rows = manifest.read('batch')
+        for row in rows:
+            state = json.loads(row['clone_state'])
+            state.pop('expected_product_count')
+            state['task_ids'] = ['task-group-1', 'task-group-2']
+            row['clone_state'] = json.dumps(state)
+        manifest.write('batch', rows)
+        self.assertEqual(self.run_batch(retry_errors=True)['errors'], 2)
+        self.assertFalse(self.fake.updates)
+        self.assertEqual(self.fake.clone_calls, 1)
+        self.assertTrue(all(json.loads(row['clone_state'])['require_complete_products']
+                            for row in manifest.read('batch')))
+        for group in self.fake.campaigns[1:]:
+            group['productIds'].append(group['id']+'-hoodie')
+        self.assertEqual(self.run_batch(retry_errors=True)['done'], 2)
+        self.assertEqual(self.fake.clone_calls, 1)
 
     def test_lost_clone_reply_recovers_existing_campaigns(self):
         self.fake.lose_response = True

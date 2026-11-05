@@ -155,5 +155,90 @@ class MonitoringTests(unittest.TestCase):
             instance.job.close.assert_called_once()
 
 
+class ServerLifecycleTests(unittest.TestCase):
+    @unittest.skipUnless(supervisor.os.name == "nt", "Windows error codes are platform-specific")
+    def test_failed_assignment_keeps_original_error_after_process_cleanup(self):
+        job = supervisor.WindowsChildJob.__new__(supervisor.WindowsChildJob)
+        job.handle = 77
+        job.kernel = Mock()
+        job.kernel.AssignProcessToJobObject.return_value = 0
+        proc = Mock(_handle=42, pid=123)
+        proc.poll.return_value = None
+        proc.terminate.side_effect = lambda: supervisor.ctypes.set_last_error(87)
+        with patch.object(supervisor.subprocess, "Popen", return_value=proc):
+            supervisor.ctypes.set_last_error(5)
+            with self.assertRaises(OSError) as failure:
+                job.spawn(["disposable-test-process"])
+        self.assertEqual(failure.exception.winerror, 5)
+        proc.terminate.assert_called_once()
+        proc.wait.assert_called_once_with(timeout=15)
+
+    def create_root(self, root):
+        (root / "logs").mkdir()
+        for sha in (SHA1, SHA2):
+            release = root / "releases" / sha
+            release.mkdir(parents=True)
+            (release / ".prepared").write_text(sha, encoding="ascii")
+        supervisor.write_json(root / "state.json", {"current": SHA1})
+        return {"data_root": str(root / "data"), "port": 8780}
+
+    def job(self):
+        job = Mock()
+        job.spawn.return_value.poll.return_value = None
+        return job
+
+    def test_every_release_and_rollback_uses_a_fresh_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = self.create_root(root)
+            initial, first, replacement, rollback = [self.job() for _ in range(4)]
+            with patch.object(supervisor, "WindowsChildJob", side_effect=[initial, first, replacement, rollback]), \
+                    patch.object(supervisor, "health", side_effect=[{"release": SHA1}, {"release": SHA2}, {"release": SHA1}]):
+                instance = supervisor.Supervisor(root, settings)
+                for sha, expected in ((SHA1, first), (SHA2, replacement), (SHA1, rollback)):
+                    instance.start(sha)
+                    self.assertIs(instance.job, expected)
+                    expected.spawn.assert_called_once()
+                    instance.stop()
+                instance.job.close()
+            initial.close.assert_called_once()
+            first.close.assert_called_once()
+            replacement.close.assert_called_once()
+            rollback.close.assert_called_once()
+
+    def test_assignment_failure_closes_handles_and_rollback_uses_another_job(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = self.create_root(root)
+            initial, rejected, rollback = [self.job() for _ in range(3)]
+            rejected.spawn.side_effect = PermissionError(5, "Assignment failed")
+            with patch.object(supervisor, "WindowsChildJob", side_effect=[initial, rejected, rollback]), \
+                    patch.object(supervisor, "health", return_value={"release": SHA1}):
+                instance = supervisor.Supervisor(root, settings)
+                with self.assertRaisesRegex(PermissionError, "Assignment failed"):
+                    instance.start(SHA2)
+                self.assertIsNone(instance.proc)
+                self.assertIsNone(instance.log)
+                self.assertTrue(rejected.spawn.call_args.kwargs["stdout"].closed)
+                rejected.close.assert_called_once()
+                instance.start(SHA1)
+                self.assertIs(instance.job, rollback)
+                instance.stop()
+                instance.job.close()
+
+    def test_start_never_closes_a_job_that_still_owns_a_server(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            settings = self.create_root(root)
+            job = self.job()
+            with patch.object(supervisor, "WindowsChildJob", return_value=job):
+                instance = supervisor.Supervisor(root, settings)
+                instance.proc = Mock()
+                with self.assertRaisesRegex(RuntimeError, "Stop the owned server"):
+                    instance.start(SHA2)
+            job.close.assert_not_called()
+            job.spawn.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
