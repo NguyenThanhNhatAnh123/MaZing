@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="vi"><head><meta charset="utf-8"><title>Mayzing Session Bridge</title>
+<style>
+body{width:340px;margin:0;padding:20px;box-sizing:border-box;background:#111318;color:#f4f4f5;font:14px/1.5 system-ui}
+h1{font-size:18px;margin:0 0 8px}p{color:#b5bbc6}label{display:block;margin:12px 0 4px}
+input{box-sizing:border-box;width:100%;padding:10px;background:#20242d;color:white;border:1px solid #414856;border-radius:7px}
+button{margin-top:14px;width:100%;padding:11px;border:0;border-radius:7px;background:#d4f57a;color:#172109;font-weight:700;cursor:pointer}
+button.secondary{background:#303641;color:white}button:disabled{opacity:.5;cursor:wait}#status{white-space:pre-wrap;margin-top:14px;font-size:13px}
+</style></head><body>
+<h1>Mayzing Session Bridge</h1>
+<p>Đăng nhập Mayzing trong Chrome trước. Tiện ích chỉ dùng tab Mayzing bạn chọn; cookie vẫn nằm trong Chrome.</p>
+<label for="server">Tool trên máy</label><input id="server" value="http://127.0.0.1:8780/" spellcheck="false">
+<label for="code">Mã từ nút “Tạo mã kết nối” trong tool</label><input id="code" autocomplete="off" spellcheck="false" maxlength="20">
+<button id="connect">Cho phép tool dùng tab Mayzing này</button>
+<button id="disconnect" class="secondary" hidden>Ngắt kết nối</button>
+<div id="status" role="status"></div>
+<script src="popup.js"></script></body></html>

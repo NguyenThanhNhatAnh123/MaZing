@@ -1,0 +1,14 @@
+{
+  "StoresMinimal": "query StoresMinimal {\n  stores { id name slug type domainName region isCatalogPublished publishing processing\n           currencies { defaultCurrency } }\n}",
+  "StoreGroups": "query StoreGroups($storeSlug: String!) {\n  store(slug: $storeSlug) { id slug storeGroups { id name slug productIds heroProductId createdAt processing clonable tags } }\n}",
+  "StoreGroup": "query StoreGroup($storeSlug: String!, $groupId: String!) {\n  store(slug: $storeSlug) { id slug storeGroup(id: $groupId) { id name slug productIds heroProductId createdAt processing clonable tags } }\n}",
+  "CheckGroupNameSlugAvailability": "query CheckGroupNameSlugAvailability($slug: String!, $name: String!, $storeSlug: String!) {\n  checkGroupNameSlugAvailability(slug: $slug, name: $name, storeSlug: $storeSlug) { name slug }\n}",
+  "ImageUpload": "mutation ImageUpload($file: Upload!, $imageUploadInput: ImageUploadInput!) {\n  imageUpload(file: $file, imageUploadInput: $imageUploadInput) {\n    id name filename ext type width height createdAt\n  }\n}",
+  "CloneGroup": "mutation CloneGroup($groupId: String!, $imageIds: [String!]!) {\n  cloneGroup(groupId: $groupId, imageIds: $imageIds) { id type status storeSlug }\n}",
+  "OperationTask": "query OperationTask($id: String!) {\n  operationTask(id: $id) {\n    id type status storeSlug createdAt startedProcessingAt finishedProcessingAt\n    summary { total retryFailed notStarted inProgress succeeded partiallySucceeded failed\n              partiallyFailed skipped canceled progress }\n  }\n}",
+  "UpdateStoreGroup": "mutation UpdateStoreGroup($input: UpdateStoreGroupInput!) {\n  updateStoreGroup(input: $input) { id name slug productIds heroProductId createdAt processing clonable tags }\n}",
+  "PublishCatalog": "mutation PublishCatalog($storeSlug: String!) {\n  publishCatalog(storeSlug: $storeSlug) { id slug isCatalogPublished }\n}",
+  "StoreGroupWithProducts": "query StoreGroupWithProducts($storeSlug: String!, $groupId: String!) {\n  store(slug: $storeSlug) { id slug storeGroup(id: $groupId) { id name slug productIds heroProductId processing tags products { id name baseProductId } } }\n}",
+  "StoreBulkPriceEditBaseProductFilters": "query StoreBulkPriceEditBaseProductFilters($storeSlug: String!, $page: Float!, $pageSize: Float!) {\n  storeBaseFilters(storeSlug: $storeSlug) { storeSlug storeBaseProductsFilters(page: $page, pageSize: $pageSize) { values { key label } } }\n}",
+  "UpdateStoreGroupProductOrder": "mutation UpdateStoreGroupProductOrder($input: UpdateStoreGroupProductOrderInput!) {\n  updateStoreGroupProductOrder(input: $input) { id name slug productIds heroProductId processing tags }\n}"
+}
