@@ -3,117 +3,80 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Video hướng dẫn cài Mayzing Session Bridge bằng Developer mode và kết nối shop với MaZing.">
-  <title>Hướng dẫn kết nối shop · MaZing</title>
+  <meta name="description" content="Video cài extension và 4 bước kết nối shop với MaZing.">
+  <title>Kết nối shop · MaZing</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: #ededed; background: #050505; }
+    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f2f2; background: #000; }
     * { box-sizing: border-box; }
-    body { margin: 0; font-size: 15px; line-height: 1.7; }
-    main { width: min(100% - 40px, 1080px); margin: 0 auto; padding: 32px 0 56px; }
-    a { color: #c9e5ff; text-underline-offset: 3px; }
-    a:focus-visible, summary:focus-visible { outline: 2px solid #8dc7ff; outline-offset: 5px; }
-    nav { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 38px; }
-    .brand { color: #fff; font-size: 18px; font-weight: 700; text-decoration: none; }
-    .eyebrow { color: #a1a1a1; font-size: 12px; letter-spacing: .09em; text-transform: uppercase; }
-    h1 { font-size: clamp(28px, 5vw, 40px); line-height: 1.2; margin: 10px 0 16px; letter-spacing: -.03em; }
-    h2 { font-size: 21px; margin: 0 0 12px; line-height: 1.4; }
-    h3 { font-size: 17px; margin: 0 0 8px; }
-    p { margin: 0 0 14px; }
-    .intro { max-width: 720px; color: #aaa; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 22px 0; }
-    .button { display: inline-flex; align-items: center; min-height: 42px; padding: 8px 15px; border: 1px solid #333; border-radius: 8px; background: #171717; color: #ededed; font-size: 14px; font-weight: 600; text-decoration: none; }
-    .button:hover { background: #242424; border-color: #555; }
-    .button.primary { background: #eee; border-color: #eee; color: #111; }
-    .button.primary:hover { background: #d8d8d8; }
-    .notice { padding: 18px 20px; border: 1px solid #544328; border-radius: 10px; background: #1b160d; color: #e6d8ba; margin: 24px 0; }
-    .notice p:last-child { margin-bottom: 0; }
-    .panel { background: #0c0c0c; border: 1px solid #292929; border-radius: 12px; padding: 24px; margin-top: 24px; }
-    video { display: block; width: 100%; max-height: 65vh; margin-top: 16px; background: #000; border-radius: 8px; }
-    .muted { color: #a1a1a1; font-size: 14px; }
-    code { font-family: ui-monospace, Consolas, monospace; font-size: .93em; background: #222; border-radius: 4px; padding: 2px 5px; overflow-wrap: anywhere; }
-    .steps { padding: 0; margin: 20px 0 0; list-style: none; counter-reset: step; }
-    .steps > li { position: relative; padding: 0 0 24px 48px; margin-top: 24px; border-bottom: 1px solid #252525; counter-increment: step; }
-    .steps > li:last-child { border-bottom: 0; padding-bottom: 0; }
-    .steps > li::before { content: counter(step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 30px; height: 30px; background: #242424; border: 1px solid #444; border-radius: 50%; font-weight: 700; }
-    .steps p:last-child { margin-bottom: 0; }
-    details { padding: 14px 0; border-bottom: 1px solid #292929; }
-    details:last-child { border-bottom: 0; padding-bottom: 0; }
-    summary { cursor: pointer; font-weight: 600; }
-    details p { margin: 12px 0 0; color: #bbb; }
-    footer { margin-top: 28px; color: #888; font-size: 13px; }
-    @media (max-width: 600px) { main { width: calc(100% - 28px); padding-top: 20px; } nav { margin-bottom: 28px; } .panel { padding: 18px; } .actions .button { flex: 1 1 180px; justify-content: center; } .steps > li { padding-left: 42px; } }
+    body { margin: 0; font-size: 14px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+    main { width: min(100% - 48px, 920px); margin: auto; padding: 28px 0 40px; }
+    a { color: inherit; text-underline-offset: 4px; }
+    a:focus-visible { outline: 2px solid #fff; outline-offset: 5px; }
+    nav { display: flex; align-items: center; justify-content: space-between; padding-bottom: 28px; }
+    nav a { color: #999; font-size: 12px; text-decoration: none; }
+    nav a:hover { color: #fff; }
+    nav .brand { color: #fff; font-size: 17px; font-weight: 700; letter-spacing: -.04em; }
+    header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 20px 0 30px; }
+    .eyebrow { margin: 0 0 6px; color: #888; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.15; letter-spacing: -.045em; }
+    .actions { display: flex; align-items: center; gap: 10px; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 15px; border: 1px solid #303030; border-radius: 7px; font-size: 12px; font-weight: 600; text-decoration: none; }
+    .button:hover { background: #141414; }
+    .button.primary { color: #000; background: #f2f2f2; border-color: #f2f2f2; }
+    .button.primary:hover { background: #d9d9d9; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, .85fr); align-items: start; gap: 36px; }
+    .video-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: #888; font-size: 11px; }
+    .video-heading h2 { margin: 0; font-size: inherit; font-weight: 500; color: #aaa; }
+    video { display: block; width: 100%; aspect-ratio: 16 / 9; border: 1px solid #202020; border-radius: 9px; background: #080808; }
+    .server { display: flex; align-items: center; gap: 18px; margin: 24px 0 0; padding: 16px 0; border-bottom: 1px solid #242424; }
+    .server span { flex: none; color: #888; font-size: 11px; }
+    .server code { color: #dedede; font-size: 12px; overflow-wrap: anywhere; user-select: all; }
+    code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
+    .steps { display: grid; gap: 26px; list-style: none; padding: 24px 0 0; margin: 0; counter-reset: step; }
+    .steps li { position: relative; padding-left: 30px; counter-increment: step; }
+    .steps li::before { content: "0" counter(step); position: absolute; left: 0; top: 2px; color: #666; font: 11px/1.65 ui-monospace, Consolas, monospace; }
+    .steps h2 { margin: 0 0 7px; font-size: 14px; line-height: 1.5; font-weight: 600; }
+    .steps h2 a { text-decoration: none; }
+    .steps h2 a:hover { text-decoration: underline; }
+    .steps p { margin: 0; color: #929292; font-size: 12px; line-height: 1.85; }
+    .steps strong, .steps code { color: #d5d5d5; font-weight: 500; }
+    footer { border-top: 1px solid #242424; margin-top: 28px; padding-top: 18px; color: #888; font-size: 11px; }
+    @media (max-width: 760px) { .layout { grid-template-columns: 1fr; gap: 28px; } .steps { grid-template-columns: 1fr 1fr; padding: 0; } }
+    @media (max-width: 620px) { main { width: calc(100% - 32px); padding-top: 20px; } nav { padding-bottom: 18px; } header { align-items: flex-start; gap: 18px; padding: 12px 0 24px; } .actions { width: 100%; } .button { flex: 1; } .steps { grid-template-columns: 1fr; gap: 22px; } .server { align-items: flex-start; gap: 12px; } .server code { font-size: 10px; } }
   </style>
 </head>
 <body>
 <main>
-  <nav aria-label="Điều hướng"><a class="brand" href="/">MaZing</a><a href="/">Về dashboard →</a></nav>
+  <nav aria-label="Điều hướng"><a class="brand" href="/">MaZing</a><a href="/">Về dashboard ↗</a></nav>
   <header>
-    <div class="eyebrow">Hướng dẫn sử dụng</div>
-    <h1>Kết nối shop với MaZing</h1>
-    <p class="intro">Trên mỗi máy, mở MaZing bằng Google Chrome, cài tiện ích Mayzing Session Bridge 1.2.0 rồi đăng nhập và ghép shop của bạn. Xem video cài tiện ích và làm theo các bước bên dưới để kết nối bản web.</p>
+    <div><p class="eyebrow">Hướng dẫn</p><h1>Kết nối shop</h1></div>
     <div class="actions">
-      <a class="button primary" href="/api/huongdan/extension.zip" download>Tải extension (.zip)</a>
-      <a class="button" href="#video">Xem video hướng dẫn</a>
-      <a class="button" href="https://mz.eagleglobal2023.com/" target="_blank" rel="noopener">Mở dashboard MaZing</a>
+      <a class="button primary" href="/api/huongdan/extension.zip" download>Tải extension</a>
+      <a class="button" href="/" target="_blank" rel="noopener">Mở MaZing ↗</a>
     </div>
   </header>
 
-  <aside class="notice" aria-label="Lưu ý trước khi kết nối">
-    <p><strong>Mỗi máy / hồ sơ Chrome kết nối shop riêng.</strong> Mở <a href="https://mz.eagleglobal2023.com/" target="_blank" rel="noopener">mz.eagleglobal2023.com</a> trong Chrome trên máy của bạn để tạo mã và bật tự động upload. Không cần chạy MaZing local trên máy khách.</p>
-    <p>Cài tiện ích trong đúng hồ sơ Chrome đang đăng nhập shop. Giữ Chrome và tab shop mở trong lúc upload. Phiên MaZing được nhận diện bằng cookie của hồ sơ trình duyệt; xoá cookie, dùng ẩn danh hoặc đổi hồ sơ sẽ mở một phiên khác.</p>
-  </aside>
-
-  <section class="panel" id="video" aria-labelledby="video-title">
-    <h2 id="video-title">Video cài extension bằng Developer mode</h2>
-    <p class="muted">Bấm phát để xem cách cài tiện ích. Video có thể dùng địa chỉ local của bản cũ; khi dùng bản web, làm theo địa chỉ máy chủ và các bước cập nhật bên dưới.</p>
-    <video controls playsinline preload="metadata" aria-label="Video hướng dẫn cài extension bằng Developer mode">
+  <div class="layout">
+  <div class="media">
+  <section id="video" aria-labelledby="video-title">
+    <div class="video-heading"><h2 id="video-title">Video cài extension</h2><span>Chrome · v1.2.0</span></div>
+    <video controls playsinline preload="metadata" aria-label="Video hướng dẫn cài extension">
       <source src="/api/huongdan/video.mp4" type="video/mp4">
-      Trình duyệt chưa hỗ trợ phát video. <a href="/api/huongdan/video.mp4" download="huong-dan-cai-extension-developer-mode.mp4">Tải video để xem</a>.
+      <a href="/api/huongdan/video.mp4" download>Tải video</a>
     </video>
-    <p class="muted" style="margin:14px 0 0"><a href="/api/huongdan/video.mp4" download="huong-dan-cai-extension-developer-mode.mp4">Tải video hướng dẫn (.mp4)</a></p>
   </section>
 
-  <section class="panel" aria-labelledby="steps-title">
-    <h2 id="steps-title">Các bước kết nối shop</h2>
-    <ol class="steps">
-      <li>
-        <h3>Tải và giải nén extension</h3>
-        <p>Bấm <a href="/api/huongdan/extension.zip" download>Tải extension (.zip)</a>, sau đó giải nén file <code>Mayzing-Session-Bridge.zip</code>. Bên trong có thư mục <code>chrome-extension</code> chứa <code>manifest.json</code>.</p>
-      </li>
-      <li>
-        <h3>Cài extension trong Chrome</h3>
-        <p>Nhập <code>chrome://extensions</code> vào thanh địa chỉ. Bật <strong>Developer mode / Chế độ dành cho nhà phát triển</strong>, chọn <strong>Load unpacked / Tải tiện ích đã giải nén</strong>, rồi chọn thư mục <code>chrome-extension</code>.</p>
-        <p>Kiểm tra tiện ích <strong>Mayzing Session Bridge 1.2.0</strong> đã được bật. Bấm biểu tượng mảnh ghép trên thanh công cụ Chrome và ghim tiện ích để dễ mở. Nếu đang dùng bản cũ, thay thư mục bằng bản tải mới rồi bấm nút nạp lại trong <code>chrome://extensions</code>.</p>
-      </li>
-      <li>
-        <h3>Đăng nhập shop Mayzing</h3>
-        <p>Mở <a href="https://dashboard.mayzing.com/dashboard" target="_blank" rel="noopener">dashboard Mayzing</a> và đăng nhập thủ công bằng tài khoản shop. Chờ dashboard tải xong rồi giữ tab này mở.</p>
-      </li>
-      <li>
-        <h3>Tạo mã và ghép tab shop</h3>
-        <p>Trong <a href="https://mz.eagleglobal2023.com/" target="_blank" rel="noopener">dashboard MaZing</a> trên cùng máy và hồ sơ Chrome, vào tab <strong>Mayzing</strong> và bấm <strong>Tạo mã kết nối</strong>. Sao chép mã đang hiển thị.</p>
-        <p>Quay lại tab shop Mayzing đã đăng nhập, mở tiện ích <strong>Mayzing Session Bridge</strong>. Đặt ô <strong>Máy chủ MaZing</strong> là <code>https://mz.eagleglobal2023.com</code>, dán mã và bấm <strong>Cho phép tool dùng tab Mayzing này</strong>. Tiện ích nhớ máy chủ đã chọn cho lần mở sau.</p>
-        <p class="muted">Mã có hạn 24 giờ, dùng một lần. Sau khi ghép thành công, kết nối không bị giới hạn bởi thời hạn của mã.</p>
-      </li>
-      <li>
-        <h3>Bật tự động upload và chọn store</h3>
-        <p>Quay lại dashboard MaZing đã tạo mã, bấm <strong>Bật tự động upload</strong>. Khi tool nhận được phiên đăng nhập, chọn đúng <strong>Store</strong>, chọn campaign gốc theo tông màu design rồi bấm <strong>Lưu</strong>.</p>
-        <p>Bạn có thể bắt đầu quy trình <strong>Design → Duyệt → Batch &amp; upload</strong>.</p>
-      </li>
-    </ol>
-  </section>
+  <div class="server"><span>Máy chủ extension</span><code>https://mz.eagleglobal2023.com</code></div>
+  </div>
 
-  <section class="panel" aria-labelledby="help-title">
-    <h2 id="help-title">Khi chưa kết nối được</h2>
-    <details><summary>Bấm mở shop nhưng Chrome không tự bật</summary><p>Nút mở shop mở một tab trong trình duyệt bạn đang dùng. Hãy mở dashboard MaZing bằng Google Chrome, rồi bấm Mở shop Mayzing. Website không thể tự khởi chạy Chrome trên một máy khác.</p></details>
-    <details><summary>Không tạo được mã hoặc tiện ích không kết nối bản web</summary><p>Kiểm tra mạng và tải lại dashboard. Cập nhật tiện ích lên bản 1.2.0 rồi nạp lại. Đặt Máy chủ MaZing đúng <code>https://mz.eagleglobal2023.com</code> và tạo mã mới trên dashboard này; không dùng mã từ bản local hoặc máy khác.</p></details>
-    <details><summary>Chrome báo thiếu manifest khi tải tiện ích</summary><p>Giải nén file ZIP trước. Khi chọn Load unpacked, chọn đúng thư mục <code>chrome-extension</code> chứa file <code>manifest.json</code>, không chọn file ZIP hoặc thư mục cha.</p></details>
-    <details><summary>Mã hết hạn, đã dùng hoặc tool vừa khởi động lại</summary><p>Bấm Tạo mã kết nối để lấy mã mới rồi ghép lại trên tab shop. Sau khi khởi động lại tool hoặc Chrome, bạn cần kết nối lại và bật tự động upload.</p></details>
-    <details><summary>Tiện ích chưa nhận shop hoặc Mayzing yêu cầu xác minh</summary><p>Mở tiện ích khi đang ở tab <code>dashboard.mayzing.com</code> đã đăng nhập, trong đúng hồ sơ Chrome. Nếu Mayzing hiện trang xác minh, hoàn tất trực tiếp trên trang rồi thử kết nối lại.</p></details>
-    <details><summary>Dùng nhiều máy hoặc nhiều hồ sơ Chrome</summary><p>Lặp lại các bước cài và ghép trên từng máy / hồ sơ Chrome. Tạo mã từ dashboard của chính hồ sơ đó. Mỗi phiên có shop, cấu hình, design, batch và job riêng; ghép máy thứ hai không thay kết nối của máy thứ nhất. Phiên này chưa đồng bộ giữa các máy qua tài khoản đăng nhập.</p></details>
-    <details><summary>Muốn dùng MaZing local trên máy cá nhân</summary><p>Chạy <code>run_dashboard.bat</code>, mở <code>http://127.0.0.1:8780/</code> và tạo mã tại đó. Trong tiện ích đổi Máy chủ MaZing thành <code>http://127.0.0.1:8780</code>. Bản local và bản web là hai máy chủ riêng; mã kết nối phải được tạo trên đúng máy chủ đã chọn.</p></details>
-  </section>
-  <footer>Cookie và mật khẩu đăng nhập shop ở trong Chrome. Khi muốn dừng, bấm Tắt tự động trong tool hoặc Ngắt kết nối trong tiện ích.</footer>
+  <ol class="steps" aria-label="Các bước kết nối shop">
+    <li><h2>Cài extension</h2><p>Giải nén ZIP → <code>chrome://extensions</code> → <strong>Developer mode</strong> → <strong>Load unpacked</strong> → chọn thư mục <code>chrome-extension</code>.</p></li>
+    <li><h2><a href="https://dashboard.mayzing.com/dashboard" target="_blank" rel="noopener">Đăng nhập shop ↗</a></h2><p>Mở Mayzing và đăng nhập tài khoản shop.</p></li>
+    <li><h2>Ghép shop</h2><p>MaZing → <strong>Mayzing</strong> → <strong>Tạo mã kết nối</strong>. Dán mã vào extension và cho phép kết nối.</p></li>
+    <li><h2>Bật tự động</h2><p>Quay lại MaZing → <strong>Bật tự động upload</strong> → chọn <strong>Store / Origin</strong> → <strong>Lưu</strong>.</p></li>
+  </ol>
+  </div>
+  <footer>Dùng cùng hồ sơ Chrome. Giữ tab shop mở.</footer>
 </main>
 </body>
 </html>
