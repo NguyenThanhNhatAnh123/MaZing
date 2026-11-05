@@ -1,5 +1,16 @@
 # mayzing-bulk-upload
 
+**Production:** mở `https://mz.eagleglobal2023.com` bằng Chrome trên từng máy.
+Mỗi hồ sơ trình duyệt có phiên shop, design, cấu hình và job riêng. Cài hoặc cập nhật
+Mayzing Session Bridge **1.2.0**, giữ máy chủ trong tiện ích là
+`https://mz.eagleglobal2023.com`, tạo mã ngay trên dashboard prod rồi ghép tab shop.
+Không cần cài Python hay chạy tool local trên máy khách. Video và hướng dẫn:
+`https://mz.eagleglobal2023.com/api/huongdan`.
+
+CI kiểm tra Windows/Linux trên mỗi push/PR. Máy chủ tự triển khai commit `main`
+đã qua CI, chờ job hoàn tất và rollback nếu kiểm tra sức khỏe thất bại.
+Xem [cài đặt và vận hành CI/CD](docs/deployment.md). Các bước local bên dưới vẫn dùng được.
+
 **Luồng hiện tại:** mở Chrome thường → đăng nhập thủ công → kết nối tab bằng
 **Mayzing Session Bridge** → bấm **Bật tự động upload**. Cookie vẫn nằm trong Chrome;
 tool không dùng Playwright. Xem [hướng dẫn tiện ích](chrome-extension/README.md).
@@ -48,6 +59,9 @@ Chrome mở bình thường bằng hồ sơ bạn chọn; không dùng hồ sơ 
    tag thêm (nếu có), bấm **Lưu**.
 
 ## 2. Dùng hằng ngày (dashboard)
+
+Video cài extension và các bước kết nối shop: mở `/api/huongdan` trên dashboard.
+Trang có nút tải extension ZIP, video MP4 và hướng dẫn ghép Chrome qua tool local.
 
 Giao diện giống dashboard PodSach: cột trái là các bước quy trình, job đang chạy (thanh tiến độ, nút
 "Xem log") và thông tin store / OCR / origin / session; góc trên phải là store đang kết nối và trạng thái job.

@@ -126,6 +126,58 @@ class BridgeTests(unittest.TestCase):
         self.assertIn('bị ngắt', outcome['error'])
         self.assertFalse(broker.commands)
 
+    def test_completed_reply_cannot_cross_pairing_generation(self):
+        broker, token = self.connected(enabled=True)
+        caller, outcome = self.request_thread(broker)
+        command = broker.poll(token, READY, wait_s=0)['command']
+        # Keep the waiting caller asleep until its old reply has been completed
+        # and a different browser has replaced that connection.
+        with broker.cv:
+            broker.acknowledge(token, command['id'], {
+                'kind': 'response', 'status': 200, 'text': 'old browser reply'})
+            replacement = broker.pair(broker.pairing_code()['code'])['token']
+            broker.heartbeat(replacement, READY)
+        caller.join(timeout=1)
+        self.assertFalse(caller.is_alive())
+        self.assertIn('error', outcome)
+        self.assertNotIn('reply', outcome)
+        self.assertFalse(broker.commands)
+
+    def test_pairing_discards_commands_queued_for_previous_browser(self):
+        broker, _ = self.connected(enabled=True)
+        caller, outcome = self.request_thread(broker)
+        with broker.cv:
+            replacement = broker.pair(broker.pairing_code()['code'])['token']
+            broker.heartbeat(replacement, READY)
+            self.assertFalse(broker.commands)
+            self.assertIsNone(broker.poll(replacement, READY, wait_s=0)['command'])
+        caller.join(timeout=1)
+        self.assertFalse(caller.is_alive())
+        self.assertIn('error', outcome)
+        self.assertNotIn('reply', outcome)
+
+    def test_enable_rejects_verification_from_previous_browser(self):
+        broker, _ = self.connected()
+        verified_generation = broker.generation
+        replacement = broker.pair(broker.pairing_code()['code'])['token']
+        broker.heartbeat(replacement, READY)
+        with self.assertRaises(BridgeError):
+            broker.enable(expected_generation=verified_generation)
+        self.assertFalse(broker.status()['automation'])
+        broker.enable(expected_generation=broker.generation)
+        self.assertTrue(broker.status()['automation'])
+
+    def test_request_rejects_job_bound_to_previous_browser(self):
+        broker, _ = self.connected(enabled=True)
+        job_generation = broker.generation
+        replacement = broker.pair(broker.pairing_code()['code'])['token']
+        broker.heartbeat(replacement, READY)
+        broker.enable()
+        with self.assertRaises(BridgeError):
+            broker.request('CloneGroup', {}, mutating=True, timeout=0.1,
+                           expected_generation=job_generation)
+        self.assertFalse(broker.commands)
+
     def test_lost_heartbeat_requires_enabling_again(self):
         broker, token = self.connected(enabled=True)
         broker.last_seen = time.monotonic() - 40
@@ -169,7 +221,8 @@ class BridgeTests(unittest.TestCase):
     def test_extension_has_no_cookie_or_debugger_permission(self):
         manifest = json.loads((Path(__file__).resolve().parents[1] / 'chrome-extension/manifest.json').read_text(encoding='utf-8'))
         self.assertEqual(set(manifest['permissions']), {'activeTab', 'scripting', 'storage'})
-        self.assertEqual(set(manifest['host_permissions']), {'http://127.0.0.1/*', 'http://localhost/*'})
+        self.assertEqual(set(manifest['host_permissions']),
+                         {'http://127.0.0.1/*', 'http://localhost/*', 'https://mz.eagleglobal2023.com/*'})
 
 
 if __name__ == '__main__':

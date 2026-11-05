@@ -20,3 +20,6 @@ used_slugs.txt
 .agents/
 .codex/
 .pytest_cache/
+devices/
+.session-key
+deploy-state/

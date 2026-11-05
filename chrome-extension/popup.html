@@ -9,9 +9,10 @@ button.secondary{background:#303641;color:white}button:disabled{opacity:.5;curso
 </style></head><body>
 <h1>Mayzing Session Bridge</h1>
 <p>Đăng nhập Mayzing trong Chrome trước. Tiện ích chỉ dùng tab Mayzing bạn chọn; cookie vẫn nằm trong Chrome.</p>
-<label for="server">Tool trên máy</label><input id="server" value="http://127.0.0.1:8780/" spellcheck="false">
+<label for="server">Máy chủ MaZing</label><input id="server" value="https://mz.eagleglobal2023.com" spellcheck="false">
+<p>Mở dashboard MaZing và tạo mã trên chính máy / hồ sơ Chrome này. Địa chỉ máy chủ phải trùng với dashboard đã tạo mã.</p>
 <label for="code">Mã từ nút “Tạo mã kết nối” trong tool</label><input id="code" autocomplete="off" spellcheck="false" maxlength="20">
 <button id="connect">Cho phép tool dùng tab Mayzing này</button>
 <button id="disconnect" class="secondary" hidden>Ngắt kết nối</button>
 <div id="status" role="status"></div>
-<script src="popup.js"></script></body></html>
+<script src="server.js"></script><script src="popup.js"></script></body></html>

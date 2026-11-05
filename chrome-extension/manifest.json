@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Mayzing Session Bridge",
-  "version": "1.1.0",
-  "description": "Nối một tab Mayzing do bạn chọn với tool upload trên máy. Không xuất cookie.",
+  "version": "1.2.0",
+  "description": "Nối tab Mayzing do bạn chọn với MaZing trên web hoặc localhost. Cookie luôn ở trong Chrome.",
   "minimum_chrome_version": "116",
   "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": ["https://mz.eagleglobal2023.com/*", "http://127.0.0.1/*", "http://localhost/*"],
   "action": {"default_title": "Kết nối tab Mayzing", "default_popup": "popup.html"},
   "background": {"service_worker": "background.js"}
 }

@@ -18,6 +18,7 @@ from typing import Callable
 
 import config
 from lib.browser_bridge import BRIDGE, BridgeError
+from lib.context import BRIDGE_GENERATION
 
 AUTOMATION_DISABLED = "Kết nối Chrome đã đăng nhập rồi bấm Bật tự động upload."
 MANUAL_SESSION_HINT = "Chrome đang dùng chế độ bình thường. Bạn đăng nhập trực tiếp trên Mayzing; tool không kiểm tra phiên đăng nhập."
@@ -125,19 +126,20 @@ def _request(operation: str, payload: dict, *, allow_disabled=False):
     try:
         reply = BRIDGE.request(operation, payload, mutating=operation in MUTATIONS,
                                timeout=payload.get('timeoutMs', config.GRAPHQL_TIMEOUT_MS) / 1000 + 15,
-                               allow_disabled=allow_disabled)
+                               allow_disabled=allow_disabled, expected_generation=BRIDGE_GENERATION.get())
     except BridgeError as exc:
         raise SessionExpired(str(exc)) from exc
     return _decode_reply(reply)
 
 
 def enable_automation() -> dict:
+    generation = BRIDGE.generation
     data = _request('StoresMinimal', {'variables': {}, 'timeoutMs': 20000}, allow_disabled=True)
     stores = data.get('stores')
     if not isinstance(stores, list):
         raise SessionExpired('Chưa xác nhận được phiên Mayzing. Đăng nhập trong Chrome trước.')
     try:
-        BRIDGE.enable()
+        BRIDGE.enable(expected_generation=generation)
     except BridgeError as exc:
         raise SessionExpired(str(exc)) from exc
     return {'ok': True, 'stores': stores, 'error': ''}

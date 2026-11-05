@@ -1,4 +1,4 @@
-importScripts('operations.js');
+importScripts('operations.js', 'server.js');
 
 let activeConnection = null;
 let loopRunning = false;
@@ -9,25 +9,20 @@ function isMayzingUrl(value) {
   catch { return false; }
 }
 
-function localServer(value) {
-  const url = new URL(value);
-  if (url.protocol !== 'http:' || !['127.0.0.1', 'localhost'].includes(url.hostname) ||
-      url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
-    throw new Error('Chỉ kết nối tool trên http://127.0.0.1:8780');
-  }
-  return url.origin;
-}
-
 async function callServer(connection, path, body, signal) {
-  const response = await fetch(connection.server + '/api/bridge/' + path, {
-    method: 'POST', credentials: 'omit', redirect: 'error', signal,
-    headers: {'Content-Type': 'application/json', ...(connection.token ?
-      {'Authorization': 'Bearer ' + connection.token} : {})},
-    body: JSON.stringify(body || {})
-  });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Tool chưa phản hồi.');
-  return result;
+  let response;
+  try {
+    response = await fetch(BridgeServer.normalize(connection.server) + '/api/bridge/' + path, {
+      method: 'POST', credentials: 'omit', redirect: 'error', signal,
+      headers: {'Content-Type': 'application/json', ...(connection.token ?
+        {'Authorization': 'Bearer ' + connection.token} : {})},
+      body: JSON.stringify(body || {})
+    });
+  } catch (error) {
+    if (error.name === 'AbortError') throw error;
+    throw new Error('Không kết nối được ' + connection.server + '. Kiểm tra mạng, quyền truy cập trang của tiện ích và trạng thái MaZing.');
+  }
+  return BridgeServer.readResponse(response);
 }
 
 // These functions are serialized by chrome.scripting and run only in the selected tab.
@@ -161,10 +156,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (activeConnection || loopRunning) throw new Error('Ngắt kết nối cũ trước khi ghép lại.');
       const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
       if (!tab?.id || !isMayzingUrl(tab.url)) throw new Error('Mở tab dashboard.mayzing.com đã đăng nhập rồi bấm tiện ích.');
-      const candidate = {server: localServer(message.server), tabId: tab.id};
+      const candidate = {server: BridgeServer.normalize(message.server), tabId: tab.id};
+      await chrome.storage.local.set({bridgeServer: candidate.server});
       const page = await pageState(candidate);
       if (!page.ready) throw new Error(page.message);
       const paired = await callServer(candidate, 'pair', {code: String(message.code || '').trim()});
+      if (typeof paired.token !== 'string' || !paired.token)
+        throw new Error('Máy chủ chưa cấp phiên kết nối. Tạo mã mới trên đúng dashboard MaZing rồi thử lại.');
       activeConnection = {...candidate, token: paired.token};
       await chrome.storage.session.set({connection: activeConnection, bridgeMessage: 'Đã nối tab Mayzing. Quay lại tool và bấm Bật tự động upload.'});
       await chrome.action.setBadgeText({text: 'LINK'});
@@ -188,6 +186,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-chrome.storage.session.get('connection').then(state => {
-  if (state.connection) { activeConnection = state.connection; runLoop(); }
+chrome.storage.session.get('connection').then(async state => {
+  if (!state.connection) return;
+  try {
+    state.connection.server = BridgeServer.normalize(state.connection.server);
+    activeConnection = state.connection;
+    runLoop();
+  } catch {
+    await chrome.storage.session.remove('connection');
+    await saveMessage('Địa chỉ kết nối cũ không hợp lệ. Mở tiện ích để ghép lại.');
+  }
 });

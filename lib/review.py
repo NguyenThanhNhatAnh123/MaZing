@@ -18,6 +18,7 @@ from typing import Callable
 
 import config
 from lib import artwork, manifest, ocr, slug as slugs, titles
+from lib.context import bind_context
 
 STATE_FILE = config.WORK_DIR / "review.json"
 IMG_DIR = config.WORK_DIR / "img"
@@ -181,7 +182,7 @@ class Review:
             say(f"Đọc quote {len(new_items)} design bằng Claude...")
             done = 0
             with ThreadPoolExecutor(max_workers=config.OCR_WORKERS) as ex:
-                futs = {ex.submit(ocr.read_quote, path, item["tone"]): item for item, path in new_items}
+                futs = {ex.submit(bind_context(ocr.read_quote), path, item["tone"]): item for item, path in new_items}
                 for fut in futs:
                     item = futs[fut]
                     try:

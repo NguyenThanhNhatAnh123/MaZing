@@ -8,27 +8,83 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import threading
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
+from lib.context import WORKSPACE_ID
 
 ROOT = Path(__file__).resolve().parent
-ENV_FILE = ROOT / ".env"
+ENV_FILE = Path(os.environ.get("MAYZING_ENV_FILE", str(ROOT / ".env")))
 load_dotenv(ENV_FILE)
+BASE_DATA_ROOT = Path(os.environ.get("MAYZING_DATA_ROOT", str(ROOT))).resolve()
+DEVICE_DATA_DIR = BASE_DATA_ROOT / "devices"
+PUBLIC_ORIGIN = os.environ.get("MAYZING_PUBLIC_ORIGIN", "https://mz.eagleglobal2023.com").rstrip("/")
+_public_url = urlsplit(PUBLIC_ORIGIN)
+if (_public_url.scheme != "https" or not _public_url.hostname or _public_url.username
+        or _public_url.password or _public_url.path or _public_url.query or _public_url.fragment):
+    raise ValueError("MAYZING_PUBLIC_ORIGIN must be an HTTPS origin without a path.")
+PUBLIC_HOST = _public_url.netloc.lower()
+DRAIN_FILE = Path(os.environ.get("MAYZING_DRAIN_FILE", str(BASE_DATA_ROOT / "work" / "deploy-drain")))
+
+
+class WorkspacePath(os.PathLike):
+    """Resolve data paths in the active device, including module-level derived paths."""
+    def __init__(self, *parts):
+        self.parts = parts
+
+    def _path(self):
+        workspace = WORKSPACE_ID.get()
+        root = DEVICE_DATA_DIR / workspace if workspace else BASE_DATA_ROOT
+        return root.joinpath(*self.parts)
+
+    def __fspath__(self):
+        return str(self._path())
+
+    def __str__(self):
+        return str(self._path())
+
+    def __truediv__(self, other):
+        return WorkspacePath(*self.parts, os.fspath(other))
+
+    def __getattr__(self, name):
+        return getattr(self._path(), name)
+
+
+def session_secret():
+    """Persist the signing key outside releases; never commit it with application code."""
+    configured = os.environ.get("MAYZING_SESSION_SECRET", "")
+    if configured:
+        if len(configured) < 32:
+            raise ValueError("MAYZING_SESSION_SECRET must contain at least 32 characters.")
+        return configured
+    BASE_DATA_ROOT.mkdir(parents=True, exist_ok=True)
+    path = BASE_DATA_ROOT / ".session-key"
+    try:
+        with path.open("x", encoding="ascii") as handle:
+            handle.write(secrets.token_hex(32))
+        path.chmod(0o600)
+    except FileExistsError:
+        pass
+    value = path.read_text(encoding="ascii").strip()
+    if len(value) < 32:
+        raise ValueError("Invalid session signing key.")
+    return value
 
 # ---------------------------------------------------------------------------
 # folders
 # ---------------------------------------------------------------------------
-INPUT_DIR = ROOT / "input"              # design files dropped here
+INPUT_DIR = WorkspacePath("input")      # design files dropped here
 DONE_DIR = INPUT_DIR / "done"           # design files of exported batches
-OUTPUT_DIR = ROOT / "output"            # output/<batch>/<slug>.png + manifest.csv
-WORK_DIR = ROOT / "work"                # review state + prepared images (not shared)
-LOG_DIR = ROOT / "logs"
-AUTH_DIR = ROOT / "auth"
+OUTPUT_DIR = WorkspacePath("output")    # output/<batch>/<slug>.png + manifest.csv
+WORK_DIR = WorkspacePath("work")        # review state + prepared images (not shared)
+LOG_DIR = WorkspacePath("logs")
+AUTH_DIR = WorkspacePath("auth")
 CHROME_PROFILE_DIR = AUTH_DIR / "chrome-profile"   # Mayzing login lives here (never shared)
-SETTINGS_FILE = ROOT / "settings.json"
-USED_SLUGS_FILE = ROOT / "used_slugs.txt"          # every exported URL, never reused
+SETTINGS_FILE = WorkspacePath("settings.json")
+USED_SLUGS_FILE = WorkspacePath("used_slugs.txt")  # every exported URL, never reused
 
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
 

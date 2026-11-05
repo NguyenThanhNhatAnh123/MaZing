@@ -6,29 +6,52 @@ Run with run_dashboard.bat (or: python dashboard.py [--port N] [--no-browser]).
 from __future__ import annotations
 
 import argparse
+import hmac
+import io
 import json
 import logging
 import os
+import re
+import secrets
 import shutil
 import sys
 import threading
 import time
 import traceback
+import zipfile
+from datetime import timedelta
 from urllib.parse import urlsplit
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, request, send_file
+from flask import Flask, abort, g, jsonify, request, send_file, session
+from flask.sessions import SecureCookieSessionInterface
+from werkzeug.local import LocalProxy
 
 import config
 from lib import manifest, mayzing, ocr, review, product_defaults, slug as slugs
-from lib.browser_bridge import BRIDGE, BridgeError
+from lib.browser_bridge import BRIDGE, DEFAULT_BRIDGE, BrowserBridge, BridgeError
+from lib.context import BRIDGE_GENERATION, RUNTIME, WORKSPACE_ID, bind_context
 
 config.ensure_dirs()
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+app.config.update(SECRET_KEY=config.session_secret(), SESSION_COOKIE_NAME="mayzing_device",
+                  SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  PERMANENT_SESSION_LIFETIME=timedelta(days=30))
+
+
+class DeviceSessionInterface(SecureCookieSessionInterface):
+    def get_cookie_secure(self, application):
+        return request.host.lower() == config.PUBLIC_HOST
+
+
+app.session_interface = DeviceSessionInterface()
 log = logging.getLogger("dashboard")
-REVIEW = review.Review()
+_default_review = review.Review()
+REVIEW = LocalProxy(lambda: RUNTIME.get().review if RUNTIME.get() is not None else _default_review)
 PAGE = Path(__file__).resolve().parent / "lib" / "dashboard.html"
+GUIDE_PAGE = config.ROOT / "lib" / "huongdan.html"
+GUIDE_VIDEO = config.ROOT / "assets" / "huong-dan-cai-extension-developer-mode.mp4"
 BTHUMB_DIR = config.WORK_DIR / "batch_thumbs"
 INPUT_THUMB_DIR = config.WORK_DIR / "input_thumbs"
 
@@ -56,13 +79,19 @@ class Job:
 
     def start(self, kind: str, fn) -> bool:
         with self.lock:
-            if self.running:
+            if self.running or config.DRAIN_FILE.exists():
                 return False
             self.kind, self.running, self.lines, self.progress, self.result = kind, True, [], (0, 0), {}
+            # Publish the running flag before the final drain check: a deploy health
+            # check can then either see this job or prevent it from starting.
+            if config.DRAIN_FILE.exists():
+                self.running = False
+                return False
             self.started = time.time()
             self.cancel_event = threading.Event()
 
         def body() -> None:
+            generation_token = BRIDGE_GENERATION.set(generation)
             try:
                 self.result = fn() or {}
             except mayzing.LoginCancelled as e:
@@ -79,10 +108,12 @@ class Job:
                 log.error(traceback.format_exc())
                 self.result = {"error": str(e)}
             finally:
+                BRIDGE_GENERATION.reset(generation_token)
                 with self.lock:
                     self.running = False
                 self.say(f"--- kết thúc ({round(time.time() - self.started)} giây) ---")
-        threading.Thread(target=body, daemon=True, name=f"job-{kind}").start()
+        generation = BRIDGE.generation
+        threading.Thread(target=bind_context(body), daemon=True, name=f"job-{kind}").start()
         return True
 
     def as_json(self, since: int = 0) -> dict:
@@ -92,7 +123,8 @@ class Job:
                     "started": self.started}
 
 
-JOB = Job()
+_default_job = Job()
+JOB = LocalProxy(lambda: RUNTIME.get().job if RUNTIME.get() is not None else _default_job)
 
 
 def busy_response():
@@ -102,9 +134,173 @@ def busy_response():
 # ---------------------------------------------------------------------------
 # Mayzing cache (campaign list of the active store)
 # ---------------------------------------------------------------------------
-_campaigns: dict[str, tuple[float, list[dict]]] = {}
-_session: dict = {"checked": 0.0, "ok": None, "error": "", "stores": []}
-_product_names: dict[str, tuple[float, dict]] = {}
+_default_campaigns = {}
+_default_session = {"checked": 0.0, "ok": None, "error": "", "stores": []}
+_default_product_names = {}
+_campaigns = LocalProxy(lambda: RUNTIME.get().campaigns if RUNTIME.get() is not None else _default_campaigns)
+_session = LocalProxy(lambda: RUNTIME.get().session if RUNTIME.get() is not None else _default_session)
+_product_names = LocalProxy(lambda: RUNTIME.get().product_names if RUNTIME.get() is not None else _default_product_names)
+
+
+class DeviceRuntime:
+    def __init__(self, workspace_id):
+        self.workspace_id = workspace_id
+        self.bridge = BrowserBridge()
+        self.job = Job()
+        self.review = review.Review()
+        self.campaigns = {}
+        self.session = {"checked": 0.0, "ok": None, "error": "", "stores": []}
+        self.product_names = {}
+        self.last_seen = time.monotonic()
+
+
+DEVICE_RUNTIMES = {}
+_runtime_lock = threading.RLock()
+_active_mutation_requests = 0
+_extension_client_paths = {"/api/bridge/pair", "/api/bridge/poll", "/api/bridge/heartbeat",
+                           "/api/bridge/result", "/api/bridge/disconnect"}
+_public_paths = {"/api/health", "/api/huongdan", "/api/huongdan/", "/api/huongdan/video.mp4",
+                 "/api/huongdan/extension.zip", "/api/bridge/extension.zip"}
+
+
+def _bind_runtime(runtime):
+    g.workspace_token = WORKSPACE_ID.set(runtime.workspace_id)
+    g.runtime_token = RUNTIME.set(runtime)
+    runtime.last_seen = time.monotonic()
+
+
+def _device_runtime(workspace_id):
+    with _runtime_lock:
+        runtime = DEVICE_RUNTIMES.get(workspace_id)
+        if runtime is None:
+            # Bound memory use; persisted device files survive idle-runtime eviction.
+            if len(DEVICE_RUNTIMES) >= 1024:
+                idle = [key for key, item in DEVICE_RUNTIMES.items()
+                        if not item.job.running and not item.bridge.status()["connected"]
+                        and not item.bridge.commands
+                        and (not item.bridge.code or time.monotonic() >= item.bridge.code_expires)]
+                idle.sort(key=lambda key: DEVICE_RUNTIMES[key].last_seen)
+                for key in idle:
+                    del DEVICE_RUNTIMES[key]
+                    if len(DEVICE_RUNTIMES) < 768:
+                        break
+                if len(DEVICE_RUNTIMES) >= 1024:
+                    abort(503, "Đã đạt giới hạn phiên hoạt động. Thử lại sau.")
+            workspace_token = WORKSPACE_ID.set(workspace_id)
+            try:
+                config.ensure_dirs()
+                runtime = DeviceRuntime(workspace_id)
+            finally:
+                WORKSPACE_ID.reset(workspace_token)
+            DEVICE_RUNTIMES[workspace_id] = runtime
+        return runtime
+
+
+def _is_local_request():
+    port = str(request.environ.get("SERVER_PORT", config.DASHBOARD_PORT))
+    return (request.remote_addr in ("127.0.0.1", "::1") and
+            request.host.lower() in (f"127.0.0.1:{port}", f"localhost:{port}", "localhost", "127.0.0.1"))
+
+
+@app.before_request
+def bind_device_request():
+    global _active_mutation_requests
+    public = request.host.lower() == config.PUBLIC_HOST
+    if not public and not _is_local_request():
+        abort(403)
+    if request.url_rule is None:
+        abort(404)
+    origin = request.headers.get("Origin", "")
+    extension = bool(re.fullmatch(r"chrome-extension://[a-p]{32}", origin))
+    extension_path = request.path in _extension_client_paths
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if public and not request.is_json and request.path != "/api/inputs":
+            abort(415)
+        if request.is_json and not isinstance(request.get_json(silent=True), dict):
+            abort(400)
+        if public:
+            if origin != config.PUBLIC_ORIGIN and not (extension_path and (extension or not origin)):
+                abort(403)
+        elif origin and not (extension and extension_path):
+            try:
+                parsed = urlsplit(origin)
+                allowed = (parsed.scheme == "http" and parsed.hostname in ("localhost", "127.0.0.1")
+                           and str(parsed.port or 80) == str(request.environ.get("SERVER_PORT", config.DASHBOARD_PORT)))
+            except ValueError:
+                allowed = False
+            if not allowed:
+                abort(403)
+        if config.DRAIN_FILE.exists() and request.path not in _extension_client_paths - {"/api/bridge/pair"}:
+            return jsonify({"error": "Đang cập nhật ứng dụng. Chờ một chút rồi thử lại."}), 503
+        if request.path not in _extension_client_paths - {"/api/bridge/pair"}:
+            with _runtime_lock:
+                _active_mutation_requests += 1
+                g.counted_mutation = True
+            if config.DRAIN_FILE.exists():
+                return jsonify({"error": "Đang cập nhật ứng dụng. Chờ một chút rồi thử lại."}), 503
+    if not public or request.path in _public_paths:
+        return
+    if extension_path:
+        # Extensions intentionally omit dashboard cookies: bind by single-use code or bearer.
+        body = request.get_json(silent=True) or {}
+        runtime = None
+        with _runtime_lock:
+            if request.path == "/api/bridge/pair":
+                code = str(body.get("code") or "").strip().upper()
+                if code.isascii() and len(code) == 12:
+                    runtime = next((item for item in DEVICE_RUNTIMES.values() if item.bridge.code
+                                    and hmac.compare_digest(code, item.bridge.code)
+                                    and time.monotonic() < item.bridge.code_expires), None)
+            else:
+                try:
+                    token = _bridge_token()
+                except BridgeError:
+                    token = ""
+                if token:
+                    runtime = next((item for item in DEVICE_RUNTIMES.values() if item.bridge.token
+                                    and hmac.compare_digest(token, item.bridge.token)), None)
+        if runtime is None:
+            return jsonify({"error": "Kết nối không hợp lệ hoặc đã hết hạn. Tạo mã mới rồi ghép lại."}), 401
+        _bind_runtime(runtime)
+        return
+    if extension:
+        abort(403)
+    workspace_id = session.get("workspace_id", "")
+    if not isinstance(workspace_id, str) or not re.fullmatch(r"[a-f0-9]{32}", workspace_id):
+        workspace_id = secrets.token_hex(16)
+        session.clear()
+        session["workspace_id"] = workspace_id
+        session.permanent = True
+    _bind_runtime(_device_runtime(workspace_id))
+
+
+@app.after_request
+def private_response(response):
+    if RUNTIME.get() is not None or request.path.startswith("/api/bridge/") or request.path == "/api/health":
+        response.headers["Cache-Control"] = "private, no-store"
+        response.vary.add("Cookie")
+    return response
+
+
+@app.teardown_request
+def reset_device_request(error=None):
+    global _active_mutation_requests
+    if getattr(g, "counted_mutation", False):
+        with _runtime_lock:
+            _active_mutation_requests -= 1
+        del g.counted_mutation
+    if hasattr(g, "runtime_token"):
+        RUNTIME.reset(g.runtime_token)
+        WORKSPACE_ID.reset(g.workspace_token)
+        del g.runtime_token, g.workspace_token
+
+
+@app.get("/api/health")
+def api_health():
+    with _runtime_lock:
+        active = sum(int(item.job.running) for item in DEVICE_RUNTIMES.values()) + int(_default_job.running)
+    return jsonify({"ok": True, "release": os.environ.get("MAYZING_RELEASE", "development"),
+                    "active_jobs": active, "active_requests": _active_mutation_requests})
 
 
 def campaign_product_options(mz, store: str, group: dict) -> list[dict]:
@@ -160,6 +356,30 @@ def index():
     return send_file(PAGE)
 
 
+@app.get("/api/huongdan")
+@app.get("/api/huongdan/")
+def connection_guide():
+    return send_file(GUIDE_PAGE)
+
+
+@app.get("/api/huongdan/video.mp4")
+def connection_guide_video():
+    # Conditional responses support seeking without downloading the whole video.
+    return send_file(GUIDE_VIDEO, mimetype="video/mp4", conditional=True, max_age=86400)
+
+
+@app.get("/api/huongdan/extension.zip")
+def connection_guide_extension():
+    # Only distribute the extension's source files, never local connection data.
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name in ("manifest.json", "background.js", "server.js", "operations.js", "popup.html", "popup.js", "README.md"):
+            bundle.write(config.ROOT / "chrome-extension" / name, "chrome-extension/" + name)
+    archive.seek(0)
+    return send_file(archive, mimetype="application/zip", as_attachment=True,
+                     download_name="Mayzing-Session-Bridge.zip")
+
+
 @app.get("/api/info")
 def api_info():
     ok, why = ocr.available()
@@ -174,6 +394,8 @@ def api_info():
         "session": {"file": mayzing.has_session_file(), **_session},
         "browser": BRIDGE.status(),
         "extension_dir": str(config.ROOT / "chrome-extension"),
+        "workspace_id": WORKSPACE_ID.get(),
+        "bridge_server": config.PUBLIC_ORIGIN + "/" if RUNTIME.get() is not None else f"http://127.0.0.1:{config.DASHBOARD_PORT}/",
         "canvas": list(config.ARTWORK_CANVAS_SIZE), "artwork_mode": config.ARTWORK_MODE,
         "clone_max": config.CLONE_MAX_PER_TASK,
         "models": [config.CLAUDE_MODEL, config.CLAUDE_HARD_MODEL],
@@ -485,7 +707,13 @@ def api_publish():
 # Mayzing: login, session, store, origins
 # ---------------------------------------------------------------------------
 def _bridge_request(*, local_only=False):
-    """Restrict bridge control to this machine; credentials never appear in URLs."""
+    """Device-bound production control, or the original loopback-only local flow."""
+    if RUNTIME.get() is not None:
+        if local_only and request.path in _extension_client_paths:
+            abort(403)
+        if request.method == "POST" and not request.is_json:
+            abort(415)
+        return request.get_json(silent=True) or {}
     port = str(request.environ.get("SERVER_PORT", config.DASHBOARD_PORT))
     if request.remote_addr not in ("127.0.0.1", "::1"):
         abort(403)
@@ -518,6 +746,8 @@ def _bridge_token():
 @app.post("/api/bridge/code")
 def api_bridge_code():
     _bridge_request(local_only=True)
+    if JOB.running:
+        return busy_response()
     response = jsonify(BRIDGE.pairing_code())
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -532,6 +762,8 @@ def api_browser_status():
 @app.post("/api/bridge/pair")
 def api_bridge_pair():
     body = _bridge_request()
+    if JOB.running:
+        return busy_response()
     code = str(body.get("code") or "").strip()
     if not code.isascii() or len(code) != 12:
         return jsonify({"error": "Mã kết nối không hợp lệ."}), 400
@@ -569,8 +801,7 @@ def api_bridge_client(action):
 
 @app.get("/api/bridge/extension.zip")
 def api_bridge_extension():
-    _bridge_request(local_only=True)
-    return send_file(config.WORK_DIR / "Mayzing-Session-Bridge.zip", as_attachment=True)
+    return connection_guide_extension()
 
 
 @app.post("/api/automation/enable")
@@ -596,6 +827,9 @@ def api_automation_disable():
 
 @app.post("/api/login/start")
 def api_login_start():
+    if RUNTIME.get() is not None:
+        return jsonify({"ok": True, "manual": True, "client": True,
+                        "url": config.MAYZING_DASHBOARD + "/dashboard"})
     try:
         mayzing.open_chrome()
     except mayzing.MayzingError as exc:
@@ -627,9 +861,14 @@ def _accept_session(res: dict) -> None:
         current = next((s for s in stores if s["slug"] == settings.get("store_slug")), None)
         if current is None and len(stores) == 1:
             current = stores[0]
-        if current is not None:
-            config.save_settings({"store_slug": current["slug"], "store_name": current.get("name") or "",
-                                  "store_domain": current.get("domainName") or ""})
+        updates = {"store_slug": current["slug"] if current else "",
+                   "store_name": current.get("name") or "" if current else "",
+                   "store_domain": current.get("domainName") or "" if current else ""}
+        if settings.get("store_slug") != updates["store_slug"]:
+            updates.update(origin_default="", origin_dark="", origin_light="", default_products={})
+            _campaigns.clear()
+            _product_names.clear()
+        config.save_settings(updates)
 
 
 @app.post("/api/session/check")
@@ -721,6 +960,8 @@ def api_default_product(group_id: str):
 
 @app.post("/api/settings")
 def api_settings():
+    if JOB.running:
+        return busy_response()
     body = request.get_json(silent=True) or {}
     changes = {}
     for k in ("store_slug", "origin_default", "origin_dark", "origin_light"):
@@ -728,9 +969,15 @@ def api_settings():
             changes[k] = str(body[k] or "").strip()
     if "store_slug" in changes:
         st = next((s for s in _session.get("stores") or [] if s["slug"] == changes["store_slug"]), None)
+        if RUNTIME.get() is not None and changes["store_slug"] and st is None:
+            return jsonify({"error": "Store không thuộc phiên shop đã kết nối trên máy này."}), 403
         if st:
             changes["store_name"] = st.get("name") or ""
             changes["store_domain"] = st.get("domainName") or ""
+        if changes["store_slug"] != config.load_settings().get("store_slug"):
+            changes.update(origin_default="", origin_dark="", origin_light="", default_products={})
+            _campaigns.clear()
+            _product_names.clear()
     if "extra_tags" in body:
         tags = body["extra_tags"]
         if isinstance(tags, str):

@@ -236,6 +236,7 @@
     <button class="nav" data-view="review"><span class="step">2</span><svg><use href="#i-layers"/></svg>Duyệt<span class="count" id="n-review">0</span></button>
     <button class="nav" data-view="batches"><span class="step">3</span><svg><use href="#i-cloud"/></svg>Batch &amp; upload<span class="count" id="n-batches">0</span></button>
     <button class="nav" data-view="mayzing"><span class="step">⚙</span><svg><use href="#i-user"/></svg>Mayzing</button>
+    <a class="nav" href="/api/huongdan" target="_blank" rel="noopener" style="text-decoration:none"><span class="step">?</span><svg><use href="#i-user"/></svg>Hướng dẫn kết nối shop</a>
 
     <div class="section-title">Đang chạy</div>
     <div class="kv"><span id="job-label" style="color:var(--muted)">không có job</span></div>
@@ -341,11 +342,13 @@
         </div>
         <div class="panel">
           <h2><svg><use href="#i-user"/></svg>Session</h2>
-          <p class="desc"><b>Đăng nhập thủ công trước, bật tự động sau.</b> Mở Chrome thường và đăng nhập Mayzing. Kết nối tab đó bằng tiện ích, rồi bấm Bật tự động upload. Cookie đăng nhập luôn ở trong Chrome.</p>
+          <p class="desc"><b>Thực hiện trên mỗi máy bằng Google Chrome.</b> Mở dashboard MaZing này trong Chrome, mở shop Mayzing và đăng nhập thủ công. Kết nối tab shop bằng tiện ích, rồi bấm Bật tự động upload. Cookie đăng nhập shop luôn ở trong Chrome.</p>
+          <p class="desc" id="workspace-label"></p>
+          <p><a class="btn" href="/api/huongdan" target="_blank" rel="noopener">Xem video hướng dẫn kết nối shop</a></p>
           <div class="row">
             <span id="auth-state" class="pill"><span class="dot"></span><span>chưa kiểm tra</span></span>
             <button class="btn sm" id="btn-session" style="display:none"><svg><use href="#i-refresh"/></svg>Kiểm tra session</button>
-            <button class="btn" id="btn-login"><svg><use href="#i-user"/></svg>Mở Chrome thường</button>
+            <a class="btn" id="btn-login" href="https://dashboard.mayzing.com/dashboard" target="_blank" rel="noopener"><svg><use href="#i-user"/></svg>Mở shop Mayzing</a>
             <button class="btn" id="btn-connect-code">Tạo mã kết nối</button>
             <button class="btn primary" id="btn-auto-enable" disabled>Bật tự động upload</button>
             <button class="btn" id="btn-auto-disable" disabled>Tắt tự động</button>
@@ -355,10 +358,10 @@
           <div id="bridge-status" class="note" style="margin-top:10px"></div>
           <p id="bridge-code-box" hidden>Mã kết nối (hạn <span id="bridge-code-lifetime">24 giờ</span>, dùng một lần): <strong id="bridge-code" style="font:700 20px monospace;letter-spacing:2px"></strong>. Dán vào tiện ích ở tab Mayzing đã đăng nhập.</p>
           <details style="margin-top:12px"><summary>Cài tiện ích kết nối lần đầu</summary>
-            <p>Trong Chrome mở <code>chrome://extensions</code>, bật Developer mode, chọn Load unpacked và chọn thư mục dưới đây. Sau đó mở tab Mayzing đã đăng nhập, bấm tiện ích Mayzing Session Bridge và nhập mã kết nối.</p>
-            <p><code id="bridge-extension-path"></code></p>
+            <p>Tải bản ZIP mới nhất (1.2.0), giải nén. Trong Chrome mở <code>chrome://extensions</code>, bật Developer mode, chọn Load unpacked và chọn thư mục <code>chrome-extension</code>. Nếu đã cài bản cũ, chọn thư mục vừa cập nhật rồi nạp lại tiện ích.</p>
+            <p>Trên tab shop Mayzing đã đăng nhập, bấm tiện ích Mayzing Session Bridge. Ô <b>Máy chủ MaZing</b> phải là <code id="bridge-server"></code>, rồi nhập mã kết nối của phiên này.</p>
             <p><a href="api/bridge/extension.zip" download>Tải bản ZIP của tiện ích</a></p>
-            <p>Quyền truy cập: tab Mayzing bạn chọn và tool trên máy. Tiện ích không yêu cầu quyền đọc cookie.</p>
+            <p>Giữ tab shop và Chrome mở trong lúc upload. Mỗi máy / hồ sơ trình duyệt có kết nối, cấu hình và dữ liệu riêng. Xoá cookie hoặc đổi hồ sơ Chrome sẽ mở một phiên MaZing khác.</p>
           </details>
         </div>
         <div class="panel">
@@ -448,18 +451,19 @@
   let browserEnabling = false;
 
   async function api(path, body, method) {
-    const o = {};
+    const o = {credentials: "same-origin"};
     if (body instanceof FormData) { o.method = "POST"; o.body = body; }
     else if (body !== undefined) { o.method = method || "POST"; o.headers = {"content-type": "application/json"}; o.body = JSON.stringify(body); }
     let r;
     try { r = await fetch(path, o); }
     catch (e) {
       setOffline(true);
-      return {error: "Mất kết nối với dashboard - cửa sổ run_dashboard.bat đã tắt? Chạy lại run_dashboard.bat rồi tải lại trang.", offline: true};
+      return {error: "Không kết nối được dashboard MaZing. Kiểm tra mạng rồi tải lại trang. Nếu dùng bản local, kiểm tra run_dashboard.bat đang chạy.", offline: true};
     }
     setOffline(false);
     let data = {};
-    try { data = await r.json(); } catch (e) { data = {error: "HTTP " + r.status}; }
+    try { data = await r.json(); } catch (e) { data = {error: `Máy chủ trả HTTP ${r.status}, không phải JSON. Kiểm tra kết nối hoặc tải lại dashboard.`}; }
+    if (!data || typeof data !== "object" || Array.isArray(data)) data = {error: "Phản hồi dashboard không hợp lệ (HTTP " + r.status + ")."};
     if (!r.ok && !data.error) data.error = "HTTP " + r.status;
     return data;
   }
@@ -468,7 +472,7 @@
     if (v === offline) return;
     offline = v;
     const pill = $("#job-pill");
-    if (v) { pill.className = "pill err"; pill.lastElementChild.textContent = "mất kết nối dashboard"; toast("Mất kết nối với dashboard: chạy lại run_dashboard.bat rồi tải lại trang (F5).", 8000); }
+    if (v) { pill.className = "pill err"; pill.lastElementChild.textContent = "mất kết nối dashboard"; toast("Mất kết nối với dashboard. Kiểm tra mạng rồi tải lại trang (F5).", 8000); }
   }
   function toast(msg, ms = 2400) { const t = $("#toast"); t.textContent = msg; t.classList.add("show"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), ms); }
   function modal(html, onOk, okLabel = "Đồng ý", danger = false) {
@@ -528,7 +532,8 @@
     $("#btn-session").style.display = b.automation ? "" : "none";
     $("#btn-publish").disabled = !b.automation || jobRunning;
     $$(".choose-origin-product, .act-first-product").forEach(button => { button.disabled = !b.automation || jobRunning; });
-    $("#bridge-extension-path").textContent = INFO.extension_dir || "chrome-extension";
+    $("#bridge-server").textContent = INFO.bridge_server || location.origin;
+    $("#workspace-label").textContent = INFO.workspace_id ? `Phiên thiết bị: ${INFO.workspace_id.slice(0, 12)} · Chỉ kết nối và dữ liệu của hồ sơ trình duyệt này.` : "Kết nối trên đúng hồ sơ Chrome đang mở dashboard này.";
   }
   async function pollBridge() {
     const r = await api("api/browser/status");
@@ -650,10 +655,8 @@
     updatePreview();
   }
   $("#btn-session").onclick = () => checkSession(false);
-  $("#btn-login").onclick = async () => {
-    const r = await api("api/login/start", {});
-    if (r.error) return toast(r.error, 6000);
-    toast("Đã mở Chrome bình thường. Bạn thao tác trực tiếp trên Mayzing.", 5000);
+  $("#btn-login").onclick = () => {
+    toast("Shop mở trong trình duyệt trên máy bạn. Dùng Google Chrome để cài tiện ích và kết nối shop.", 6000);
   };
   $("#btn-connect-code").onclick = async () => {
     const r = await api("api/bridge/code", {});
@@ -1060,7 +1063,6 @@
     const pr = $("#job-progress"), [n, t] = j.progress || [0, 0];
     pr.style.display = j.running && t ? "" : "none";
     if (t) $("i", pr).style.width = Math.round(100 * n / t) + "%";
-    $("#btn-login").disabled = false;
     $("#btn-login-cancel").style.display = j.running && j.kind === "login" ? "" : "none";
     renderBrowserState();
     if (j.running !== lastRunning) {

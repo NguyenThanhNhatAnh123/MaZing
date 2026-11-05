@@ -27,6 +27,7 @@ from typing import Callable
 
 import config
 from lib import manifest, mayzing, product_defaults
+from lib.context import WORKSPACE_ID
 
 log = logging.getLogger("upload")
 
@@ -34,6 +35,8 @@ log = logging.getLogger("upload")
 def setup_logging(batch: str) -> logging.Handler:
     config.ensure_dirs()
     handler = logging.FileHandler(config.LOG_DIR / f"{batch}.log", encoding="utf-8")
+    workspace = WORKSPACE_ID.get()
+    handler.addFilter(lambda record: WORKSPACE_ID.get() == workspace)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
     log.addHandler(handler)
     log.setLevel(logging.INFO)

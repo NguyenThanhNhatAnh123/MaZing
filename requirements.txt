@@ -3,3 +3,4 @@ numpy>=1.26
 anthropic>=1.14
 python-dotenv>=1.0
 flask>=3.0
+waitress>=3.0,<4

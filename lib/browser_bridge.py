@@ -6,6 +6,8 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass, field
+from werkzeug.local import LocalProxy
+from lib.context import RUNTIME
 
 PAIRING_CODE_TTL_S = 24 * 60 * 60
 
@@ -64,6 +66,7 @@ class BrowserBridge:
             self.code = ""
             self.token = secrets.token_urlsafe(32)
             self.generation += 1
+            self.commands.clear()
             self.last_seen = time.monotonic()
             self.ready = self.enabled = False
             self.extension_version = ''
@@ -120,8 +123,11 @@ class BrowserBridge:
                     self.message = str(result.get("message") or "Tab cần bạn đăng nhập / xác minh.")[:300]
                 self.cv.notify_all()
 
-    def request(self, operation: str, payload: dict, *, mutating=False, timeout=120, allow_disabled=False):
+    def request(self, operation: str, payload: dict, *, mutating=False, timeout=120, allow_disabled=False,
+                expected_generation=None):
         with self.cv:
+            if expected_generation is not None and expected_generation != self.generation:
+                raise BridgeError("Shop đã được kết nối lại. Tool dừng job cũ; kiểm tra Task log trước khi thử lại.")
             if not self._connected():
                 raise BridgeError("Chưa nối Chrome. Đăng nhập Mayzing rồi kết nối tiện ích với tool.")
             if not self.ready:
@@ -147,12 +153,16 @@ class BrowserBridge:
                             raise BridgeError("Chưa xác nhận được kết quả thao tác. Tool không gửi lại; kiểm tra Task log Mayzing trước khi tiếp tục.")
                         raise BridgeError("Chrome chưa trả kết quả. Tool đã dừng, hãy kiểm tra tab Mayzing.")
                     self.cv.wait(min(remaining, 1))
+                if generation != self.generation:
+                    raise BridgeError("Kết nối Chrome đã thay đổi trong lúc chờ kết quả. Ghép lại và xác nhận shop trước khi tiếp tục.")
                 return command.result or {}
             finally:
                 self.commands.pop(command.id, None)
 
-    def enable(self):
+    def enable(self, expected_generation=None):
         with self.cv:
+            if expected_generation is not None and expected_generation != self.generation:
+                raise BridgeError("Kết nối Chrome đã thay đổi. Xác nhận lại shop trước khi bật tự động.")
             if not self._connected() or not self.ready:
                 raise BridgeError("Kết nối tab Mayzing đã đăng nhập trước khi bật tự động.")
             self.enabled = True
@@ -171,9 +181,11 @@ class BrowserBridge:
                 self._authenticate(token)
             self.token = ""
             self.generation += 1
+            self.commands.clear()
             self.enabled = self.ready = False
             self.message = "Đã ngắt kết nối Chrome."
             self.cv.notify_all()
 
 
-BRIDGE = BrowserBridge()
+DEFAULT_BRIDGE = BrowserBridge()
+BRIDGE = LocalProxy(lambda: RUNTIME.get().bridge if RUNTIME.get() is not None else DEFAULT_BRIDGE)
