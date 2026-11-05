@@ -5,44 +5,46 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Video cài extension và 4 bước kết nối shop với MaZing.">
   <title>Kết nối shop · MaZing</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif; color: #f2f2f2; background: #000; }
+    :root { --font: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace; color-scheme: dark; color: #f2f2f2; background: #000; }
     * { box-sizing: border-box; }
-    body { margin: 0; font-size: 14px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
-    main { width: min(100% - 48px, 920px); margin: auto; padding: 28px 0 40px; }
+    body { margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.65; -webkit-font-smoothing: antialiased; }
+    main { width: min(100% - 48px, 1040px); margin: auto; padding: 28px 0 40px; }
     a { color: inherit; text-underline-offset: 4px; }
     a:focus-visible { outline: 2px solid #fff; outline-offset: 5px; }
     nav { display: flex; align-items: center; justify-content: space-between; padding-bottom: 28px; }
-    nav a { color: #999; font-size: 12px; text-decoration: none; }
+    nav a { color: #999; font-size: 14px; text-decoration: none; }
     nav a:hover { color: #fff; }
-    nav .brand { color: #fff; font-size: 17px; font-weight: 700; letter-spacing: -.04em; }
+    nav .brand { color: #fff; font-size: 20px; font-weight: 700; letter-spacing: -.04em; }
     header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 20px; padding: 20px 0 30px; }
-    .eyebrow { margin: 0 0 6px; color: #888; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; }
-    h1 { margin: 0; font-size: clamp(30px, 5vw, 42px); font-weight: 600; line-height: 1.15; letter-spacing: -.045em; }
+    .eyebrow { margin: 0 0 6px; color: #888; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(36px, 5vw, 48px); font-weight: 600; line-height: 1.15; letter-spacing: -.045em; }
     .actions { display: flex; align-items: center; gap: 10px; }
-    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 8px 15px; border: 1px solid #303030; border-radius: 7px; font-size: 12px; font-weight: 600; text-decoration: none; }
+    .button { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 8px 16px; border: 1px solid #303030; border-radius: 7px; font-size: 14px; font-weight: 600; text-decoration: none; }
     .button:hover { background: #141414; }
     .button.primary { color: #000; background: #f2f2f2; border-color: #f2f2f2; }
     .button.primary:hover { background: #d9d9d9; }
-    .layout { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(240px, .85fr); align-items: start; gap: 36px; }
-    .video-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: #888; font-size: 11px; }
+    .layout { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(300px, 1fr); align-items: start; gap: 40px; }
+    .video-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; color: #888; font-size: 14px; }
     .video-heading h2 { margin: 0; font-size: inherit; font-weight: 500; color: #aaa; }
     video { display: block; width: 100%; aspect-ratio: 16 / 9; border: 1px solid #202020; border-radius: 9px; background: #080808; }
-    .server { display: flex; align-items: center; gap: 18px; margin: 24px 0 0; padding: 16px 0; border-bottom: 1px solid #242424; }
-    .server span { flex: none; color: #888; font-size: 11px; }
-    .server code { color: #dedede; font-size: 12px; overflow-wrap: anywhere; user-select: all; }
-    code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
+    .server { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px; margin: 24px 0 0; padding: 16px 0; border-bottom: 1px solid #242424; }
+    .server span { flex: none; color: #888; font-size: 14px; }
+    .server code { color: #dedede; font-size: 14px; overflow-wrap: anywhere; user-select: all; }
+    code { font-family: var(--mono); font-size: .92em; }
     .steps { display: grid; gap: 26px; list-style: none; padding: 24px 0 0; margin: 0; counter-reset: step; }
-    .steps li { position: relative; padding-left: 30px; counter-increment: step; }
-    .steps li::before { content: "0" counter(step); position: absolute; left: 0; top: 2px; color: #666; font: 11px/1.65 ui-monospace, Consolas, monospace; }
-    .steps h2 { margin: 0 0 7px; font-size: 14px; line-height: 1.5; font-weight: 600; }
+    .steps li { position: relative; padding-left: 36px; counter-increment: step; }
+    .steps li::before { content: "0" counter(step); position: absolute; left: 0; top: 3px; color: #666; font: 14px/1.65 var(--mono); }
+    .steps h2 { margin: 0 0 7px; font-size: 18px; line-height: 1.5; font-weight: 600; }
     .steps h2 a { text-decoration: none; }
     .steps h2 a:hover { text-decoration: underline; }
-    .steps p { margin: 0; color: #929292; font-size: 12px; line-height: 1.85; }
+    .steps p { margin: 0; color: #929292; font-size: 16px; line-height: 1.75; }
     .steps strong, .steps code { color: #d5d5d5; font-weight: 500; }
-    footer { border-top: 1px solid #242424; margin-top: 28px; padding-top: 18px; color: #888; font-size: 11px; }
-    @media (max-width: 760px) { .layout { grid-template-columns: 1fr; gap: 28px; } .steps { grid-template-columns: 1fr 1fr; padding: 0; } }
-    @media (max-width: 620px) { main { width: calc(100% - 32px); padding-top: 20px; } nav { padding-bottom: 18px; } header { align-items: flex-start; gap: 18px; padding: 12px 0 24px; } .actions { width: 100%; } .button { flex: 1; } .steps { grid-template-columns: 1fr; gap: 22px; } .server { align-items: flex-start; gap: 12px; } .server code { font-size: 10px; } }
+    footer { border-top: 1px solid #242424; margin-top: 28px; padding-top: 18px; color: #888; font-size: 14px; }
+    @media (max-width: 900px) { .layout { grid-template-columns: 1fr; gap: 28px; } .steps { grid-template-columns: 1fr 1fr; padding: 0; } }
+    @media (max-width: 620px) { main { width: calc(100% - 32px); padding-top: 20px; } nav { padding-bottom: 18px; } header { align-items: flex-start; gap: 18px; padding: 12px 0 24px; } .actions { width: 100%; } .button { flex: 1; } .steps { grid-template-columns: 1fr; gap: 22px; } .server { flex-direction: column; align-items: flex-start; } }
   </style>
 </head>
 <body>
