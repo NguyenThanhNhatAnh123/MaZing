@@ -58,6 +58,18 @@ commit in `release`. The health route does not create a workspace or set cookies
 If administrator startup is unavailable, `-RunAsCurrentUser` registers login
 startup instead; that mode requires the Windows user to remain signed in.
 
+This host is installed with `-RunAsCurrentUser`: `MaZingProduction` starts at
+Windows sign-in and is already running in the current session. Signing out stops
+availability; locking the desktop keeps it running. Switching to startup before
+sign-in requires reinstalling the task as SYSTEM from an Administrator shell.
+
+After a production update, clients should reload their dashboard. For the
+multi-device release, download extension **1.2.0** from `/api/huongdan`, extract
+it and reload or reinstall it in `chrome://extensions`. Check the extension's
+server field is `https://mz.eagleglobal2023.com`, then create a new code in that
+same browser profile and reconnect its Mayzing tab. Old loopback-only extension
+versions cannot connect remotely.
+
 The stable supervisor copy, release virtual environments, status, and logs live in
 `F:\Mayzing\work\deployment`. The deployment settings default to:
 
