@@ -83,6 +83,24 @@
   .field input, .field select { height: 32px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 0 10px; outline: 0; min-width: 180px; }
   .field input:focus, .field select:focus { border-color: var(--border-strong); }
   .field.wide input, .field.wide select { min-width: 340px; }
+  .origin-picker { display: inline-flex; min-width: 0; max-width: 100%; }
+  .field.wide .origin-picker { width: min(340px, calc(100vw - 64px)); }
+  .origin-trigger { display: flex; align-items: center; gap: 12px; width: 100%; height: 32px; padding: 0 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; font: inherit; text-align: left; }
+  .origin-trigger span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .origin-trigger::after { content: "⌄"; color: var(--muted); }
+  .origin-trigger:hover, .origin-trigger[aria-expanded="true"] { border-color: var(--border-strong); }
+  .origin-trigger:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+  .origin-menu { position: fixed; z-index: 200; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--panel-2); box-shadow: 0 12px 36px #0009; }
+  .origin-menu input { flex: none; width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border); border-radius: 6px; outline: none; background: var(--bg); font: inherit; }
+  .origin-menu input:focus { border-color: var(--muted); }
+  .origin-results { min-height: 0; overflow-y: auto; margin-top: 6px; }
+  .origin-option { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 5px; background: transparent; font: inherit; text-align: left; overflow-wrap: anywhere; }
+  .origin-option.active, .origin-option:hover:not(:disabled) { background: #262626; }
+  .origin-option[aria-selected="true"] { color: #fff; font-weight: 600; }
+  .origin-option:disabled { color: var(--dim); cursor: not-allowed; }
+  .origin-empty { margin: 0; padding: 14px 10px; color: var(--muted); font-size: 13px; }
+  .orow .origin-picker { flex: 1; }
+  .orow .origin-trigger { height: 28px; font-size: 12px; }
   .chk { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12.5px; cursor: pointer; }
   .drop { border: 1.5px dashed var(--border-strong); border-radius: var(--radius); padding: 34px 20px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color .12s, background .12s; }
   .drop:hover, .drop.over { border-color: var(--accent); background: #0f0f0f; color: var(--text); }
@@ -284,7 +302,7 @@
           <p class="desc" id="prep-store-context"></p>
           <div class="row end">
             <label class="field" title="Claude đọc quote: model rẻ đọc mọi design, model mạnh đọc lại design khó">Đọc chữ bằng<select id="opt-ocr"></select></label>
-            <label class="field wide" title="Campaign gốc cho MỌI design của lần Prep này. Để mặc định: origin theo tông màu design (tab Mayzing). Từng thẻ vẫn đổi được">Origin cho cả batch<select id="opt-origin"></select></label>
+            <div class="field wide" title="Campaign gốc cho MỌI design của lần Prep này. Để mặc định: origin theo tông màu design (tab Mayzing). Từng thẻ vẫn đổi được"><span>Origin cho cả batch</span><select id="opt-origin" aria-label="Origin cho cả batch"></select></div>
             <span class="spacer"></span>
             <button class="btn primary" id="btn-prep"><svg><use href="#i-play"/></svg>Chạy Prep</button>
           </div>
@@ -370,9 +388,9 @@
           <h2><svg><use href="#i-layers"/></svg>Origin theo tông màu design</h2>
           <p class="desc">Bulk clone sao chép <b>sản phẩm, giá, màu và mockup</b> của campaign gốc cho mọi artwork mới. Tool đo tông màu từng design: design <b>tối</b> (chữ đen) dùng origin áo sáng, design <b>sáng</b> (chữ trắng) dùng origin áo tối, design nhiều màu dùng origin mặc định. Mỗi thẻ ở tab Duyệt vẫn chọn được origin riêng.</p>
           <div class="row end" style="margin-bottom:10px">
-            <label class="field wide">Design tối → origin áo sáng<select id="org-dark"></select></label>
-            <label class="field wide">Design sáng → origin áo tối<select id="org-light"></select></label>
-            <label class="field wide">Mặc định (nhiều màu / còn lại)<select id="org-default"></select></label>
+            <div class="field wide"><span>Design tối → origin áo sáng</span><select id="org-dark" aria-label="Origin cho design tối"></select></div>
+            <div class="field wide"><span>Design sáng → origin áo tối</span><select id="org-light" aria-label="Origin cho design sáng"></select></div>
+            <div class="field wide"><span>Mặc định (nhiều màu / còn lại)</span><select id="org-default" aria-label="Origin mặc định"></select></div>
           </div>
           <div class="row">
             <button class="btn primary" id="btn-origins-save"><svg><use href="#i-save"/></svg>Lưu</button>
@@ -428,7 +446,7 @@
       <label class="lbl">Quote đọc được (sửa nếu sai) <span class="conf"></span></label>
       <textarea class="quote" rows="2" spellcheck="false"></textarea>
       <div class="title-preview"><span class="len"></span><span class="tt"></span></div>
-      <div class="orow"><span class="lbl-inline" title="Campaign gốc riêng cho design này: sản phẩm, giá, màu, mockup clone theo nó">Origin</span><select class="originsel"></select></div>
+      <div class="orow"><span class="lbl-inline" title="Campaign gốc riêng cho design này: sản phẩm, giá, màu, mockup clone theo nó">Origin</span><select class="originsel" aria-label="Origin cho design"></select></div>
       <div class="actions">
         <span class="spacer"></span>
         <button class="btn ghost sm rm" title="Bỏ thẻ khỏi tab Duyệt (file vẫn ở input/)">Bỏ thẻ</button>
@@ -530,6 +548,135 @@
     for (const c of CAMPAIGNS) h += `<option value="${esc(c.id)}"${c.id === selected ? " selected" : ""}${c.clonable === false ? " disabled" : ""}>${esc(c.name)} · /${esc(c.slug)} · ${c.products} SP${c.clonable === false ? " · không clone được" : ""}</option>`;
     return h;
   }
+  // A shared popup keeps long origin lists searchable without changing the
+  // underlying select value or firing its existing save handler while typing.
+  const originMenu = document.createElement("div");
+  originMenu.className = "origin-menu";
+  originMenu.hidden = true;
+  originMenu.innerHTML = `<input type="search" aria-label="Tìm kiếm origin" placeholder="Tìm tên hoặc /slug…" autocomplete="off"><div class="origin-results" id="origin-results" role="listbox" aria-label="Origin"></div>`;
+  document.body.append(originMenu);
+  const originSearch = $("input", originMenu), originResults = $(".origin-results", originMenu);
+  originSearch.setAttribute("aria-controls", "origin-results");
+  let activeOrigin = null, originIndex = -1, originRows = [], originStore = null;
+  const searchText = value => String(value).normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/đ/g, "d").replace(/Đ/g, "D").toLowerCase();
+  function closeOriginMenu(restoreFocus = false) {
+    if (!activeOrigin) return;
+    const trigger = activeOrigin.trigger;
+    trigger.setAttribute("aria-expanded", "false");
+    originMenu.hidden = true;
+    originSearch.removeAttribute("aria-activedescendant");
+    activeOrigin = null;
+    if (restoreFocus && trigger.isConnected) trigger.focus();
+  }
+  function activateOrigin(index, scroll = true) {
+    originIndex = index;
+    originRows.forEach((row, i) => row.button.classList.toggle("active", i === index));
+    const row = originRows[index];
+    if (row) {
+      originSearch.setAttribute("aria-activedescendant", row.button.id);
+      if (scroll) row.button.scrollIntoView({block: "nearest"});
+    } else originSearch.removeAttribute("aria-activedescendant");
+  }
+  function selectOrigin(option) {
+    if (!activeOrigin || option.disabled) return;
+    const select = activeOrigin.select, changed = select.value !== option.value;
+    select.value = option.value;
+    activeOrigin.sync();
+    closeOriginMenu(true);
+    if (changed) select.dispatchEvent(new Event("change", {bubbles: true}));
+  }
+  function filterOrigins() {
+    if (!activeOrigin) return;
+    const query = searchText(originSearch.value).trim().split(/\s+/).filter(Boolean);
+    const options = [...activeOrigin.select.options].filter(option => {
+      if (!query.length) return true;
+      if (!option.value) return false;
+      const text = searchText(option.textContent + " " + option.value);
+      return query.every(term => text.includes(term));
+    });
+    originResults.replaceChildren();
+    originRows = options.map((option, index) => {
+      const button = document.createElement("button");
+      button.type = "button"; button.className = "origin-option";
+      button.id = "origin-result-" + index; button.tabIndex = -1;
+      button.setAttribute("role", "option");
+      button.setAttribute("aria-selected", String(option.value === activeOrigin.select.value));
+      button.disabled = option.disabled; button.textContent = option.textContent;
+      button.addEventListener("click", () => selectOrigin(option));
+      originResults.append(button);
+      return {option, button};
+    });
+    if (!options.length) {
+      const empty = document.createElement("p"); empty.className = "origin-empty";
+      empty.setAttribute("role", "status"); empty.textContent = "Không tìm thấy origin";
+      originResults.append(empty);
+    }
+    const chosen = originRows.findIndex(row => !row.option.disabled && row.option.value === activeOrigin.select.value);
+    activateOrigin(chosen >= 0 ? chosen : originRows.findIndex(row => !row.option.disabled));
+  }
+  function moveOrigin(step) {
+    if (!originRows.length) return;
+    for (let offset = 1; offset <= originRows.length; offset++) {
+      const index = ((originIndex + step * offset) % originRows.length + originRows.length) % originRows.length;
+      if (!originRows[index].option.disabled) { activateOrigin(index); break; }
+    }
+  }
+  function openOriginMenu(picker) {
+    if (activeOrigin === picker) { closeOriginMenu(); return; }
+    closeOriginMenu(); activeOrigin = picker; originSearch.value = "";
+    picker.trigger.setAttribute("aria-expanded", "true");
+    const rect = picker.trigger.getBoundingClientRect();
+    const below = innerHeight - rect.bottom - 12, above = rect.top - 12;
+    const upwards = below < 220 && above > below;
+    const height = Math.min(330, Math.max(100, upwards ? above : below));
+    const width = Math.min(Math.max(rect.width, 320), innerWidth - 24);
+    Object.assign(originMenu.style, {width: width + "px", maxHeight: height + "px",
+      left: Math.max(12, Math.min(rect.left, innerWidth - width - 12)) + "px",
+      top: upwards ? "auto" : rect.bottom + 6 + "px",
+      bottom: upwards ? innerHeight - rect.top + 6 + "px" : "auto"});
+    originMenu.hidden = false; filterOrigins(); originSearch.focus();
+  }
+  function setOriginOptions(select, selected, emptyLabel) {
+    select.innerHTML = originOptions(selected, emptyLabel);
+    if (!select.originPicker) {
+      const wrapper = document.createElement("span"); wrapper.className = "origin-picker";
+      const trigger = document.createElement("button");
+      trigger.type = "button"; trigger.className = "origin-trigger";
+      trigger.setAttribute("role", "combobox"); trigger.setAttribute("aria-haspopup", "listbox");
+      trigger.setAttribute("aria-label", select.getAttribute("aria-label") || "Origin");
+      trigger.setAttribute("aria-controls", "origin-results"); trigger.setAttribute("aria-expanded", "false");
+      const text = document.createElement("span"); trigger.append(text);
+      select.before(wrapper); wrapper.append(select, trigger); select.hidden = true;
+      const picker = {select, trigger, sync() {
+        text.textContent = select.selectedOptions[0]?.textContent || emptyLabel;
+        trigger.title = text.textContent;
+        if (activeOrigin === picker) filterOrigins();
+      }};
+      select.originPicker = picker;
+      select.addEventListener("change", () => picker.sync());
+      trigger.addEventListener("click", () => openOriginMenu(picker));
+      trigger.addEventListener("keydown", event => {
+        if (["ArrowDown", "ArrowUp"].includes(event.key)) {
+          event.preventDefault(); openOriginMenu(picker);
+        }
+      });
+    }
+    select.originPicker.sync();
+  }
+  originSearch.addEventListener("input", filterOrigins);
+  originSearch.addEventListener("keydown", event => {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); moveOrigin(event.key === "ArrowDown" ? 1 : -1); }
+    else if (event.key === "Enter") { event.preventDefault(); if (originRows[originIndex]) selectOrigin(originRows[originIndex].option); }
+    else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeOriginMenu(true); }
+    else if (event.key === "Tab") closeOriginMenu(true);
+  });
+  document.addEventListener("pointerdown", event => {
+    if (activeOrigin && !originMenu.contains(event.target) && !activeOrigin.trigger.contains(event.target)) closeOriginMenu();
+  });
+  document.addEventListener("scroll", event => {
+    if (activeOrigin && !originMenu.contains(event.target)) closeOriginMenu();
+  }, true);
+  window.addEventListener("resize", () => closeOriginMenu());
   function browserStatusText() {
     const b = INFO.browser || {};
     return b.automation ? "Tự động đã bật" : b.connected ? "Chrome đã nối · chưa bật tự động" : "Chrome thường · chưa kết nối";
@@ -592,7 +739,9 @@
     $("#cfg-output").textContent = INFO.output_dir || "";
     $("#up-tags").value = (s.extra_tags || []).join(", ");
     $("#up-publish").checked = !!s.auto_publish;
-    $("#opt-origin").innerHTML = originOptions("", "Theo tông màu design (tab Mayzing)");
+    const store = s.store_slug || "";
+    setOriginOptions($("#opt-origin"), originStore === store ? $("#opt-origin").value : "", "Theo tông màu design (tab Mayzing)");
+    originStore = store;
   }
   async function checkSession(quiet) {
     $("#auth-state").className = "pill run"; $("#auth-state").lastElementChild.textContent = "đang kiểm tra…";
@@ -624,9 +773,9 @@
     const list = STORES.length ? STORES : (s.store_slug ? [{slug: s.store_slug, name: s.store_name, domainName: s.store_domain}] : []);
     $("#store-select").innerHTML = list.length ? list.map(x => `<option value="${esc(x.slug)}"${x.slug === s.store_slug ? " selected" : ""}>${esc(x.name)} · ${esc(x.domainName || x.slug)}</option>`).join("") : `<option value="">- bấm Kiểm tra session để tải store -</option>`;
     renderBrowserState();
-    $("#org-dark").innerHTML = originOptions(s.origin_dark, "- chưa chọn -");
-    $("#org-light").innerHTML = originOptions(s.origin_light, "- chưa chọn -");
-    $("#org-default").innerHTML = originOptions(s.origin_default, "- chưa chọn -");
+    setOriginOptions($("#org-dark"), s.origin_dark, "- chưa chọn -");
+    setOriginOptions($("#org-light"), s.origin_light, "- chưa chọn -");
+    setOriginOptions($("#org-default"), s.origin_default, "- chưa chọn -");
     const rows = [["Design tối (áo sáng)", s.origin_dark], ["Design sáng (áo tối)", s.origin_light], ["Mặc định", s.origin_default]];
     $("#origins-table tbody").innerHTML = rows.map(([k, id]) => {
       const c = campaignById(id);
@@ -818,6 +967,7 @@
       && (!q || [i.source, i.slug, i.title, i.quote].join(" ").toLowerCase().includes(q)));
   }
   function renderGrid() {
+    closeOriginMenu();
     const c = counts();
     for (const k of Object.keys(c)) $("#c-" + k).textContent = c[k];
     $("#n-review").textContent = c.all;
@@ -877,7 +1027,7 @@
     const q = $(".quote", el); if (document.activeElement !== q) q.value = it.quote || "";
     setTitle(el, it.title || "");
     const auto = campaignLabel(it.auto_origin);
-    $(".originsel", el).innerHTML = originOptions(it.origin, "Theo tông: " + (auto || "chưa chọn (tab Mayzing)"));
+    setOriginOptions($(".originsel", el), it.origin, "Theo tông: " + (auto || "chưa chọn (tab Mayzing)"));
     $(".approve", el).classList.toggle("on", it.decision === "approved");
     $(".reject", el).classList.toggle("on", it.decision === "rejected");
   }
@@ -927,6 +1077,7 @@
     focusUid = n.dataset.uid; n.focus(); n.scrollIntoView({block: "nearest", behavior: "smooth"});
   }
   document.addEventListener("keydown", e => {
+    if (e.target.closest(".origin-picker, .origin-menu")) return;
     if (view !== "review" || $("#overlay").classList.contains("show")) return;
     const tag = (e.target.tagName || "").toLowerCase();
     if (["input", "textarea", "select"].includes(tag)) { if (e.key === "Escape") e.target.blur(); return; }
