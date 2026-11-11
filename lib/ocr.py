@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import config
-from lib import artwork
+from lib import artwork, claude_http
 
 _PLACEHOLDER_KEYS = {"", "sk-ant-...", "your-key-here"}
 
@@ -114,13 +114,9 @@ def _clean(s: str) -> str:
 
 
 def ask(model: str, media: str, data: str, user: str, hard: bool) -> QuoteResult:
-    import anthropic
-
     key = api_key()
     if key is None:
         return QuoteResult(error="no ANTHROPIC_API_KEY", fatal=True)
-    client = anthropic.Anthropic(api_key=key, max_retries=2,
-                                 timeout=config.CLAUDE_HARD_TIMEOUT_S if hard else config.CLAUDE_TIMEOUT_S)
     params = dict(
         model=model,
         max_tokens=config.CLAUDE_HARD_MAX_TOKENS if hard else config.CLAUDE_MAX_TOKENS,
@@ -130,41 +126,43 @@ def ask(model: str, media: str, data: str, user: str, hard: bool) -> QuoteResult
             {"type": "text", "text": user},
         ]}],
     )
+    beta = ""
+    if hard:
+        if config.CLAUDE_HARD_EFFORT:
+            params["output_config"] = {"effort": config.CLAUDE_HARD_EFFORT}
+        if config.CLAUDE_REFUSAL_FALLBACK:
+            params["fallbacks"] = "default"
+            beta = "server-side-fallback-2026-07-01"
     try:
-        if hard:
-            extra = {}
-            if config.CLAUDE_HARD_EFFORT:
-                extra["output_config"] = {"effort": config.CLAUDE_HARD_EFFORT}
-            if config.CLAUDE_REFUSAL_FALLBACK:
-                extra.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
-                resp = client.beta.messages.create(**params, **extra)
-            else:
-                resp = client.messages.create(**params, **extra)
-        else:
-            resp = client.messages.create(**params)
-    except anthropic.AuthenticationError:
-        return QuoteResult(error="ANTHROPIC_API_KEY không hợp lệ", fatal=True)
-    except anthropic.PermissionDeniedError as e:
-        return QuoteResult(error=f"key không có quyền: {e.message}", fatal=True)
-    except anthropic.NotFoundError as e:
-        return QuoteResult(error=f"model {model!r} không dùng được: {e.message}")
-    except anthropic.BadRequestError as e:
-        if "credit balance" in str(e.message).lower():
+        resp = claude_http.create_message(params, key,
+            config.CLAUDE_HARD_TIMEOUT_S if hard else config.CLAUDE_TIMEOUT_S, beta=beta)
+    except claude_http.APIError as e:
+        if e.status == 401:
+            return QuoteResult(error="ANTHROPIC_API_KEY không hợp lệ", fatal=True)
+        if e.status == 403:
+            return QuoteResult(error=f"key không có quyền: {e.message}", fatal=True)
+        if e.status == 404:
+            return QuoteResult(error=f"model {model!r} không dùng được: {e.message}")
+        if e.status == 400 and "credit balance" in e.message.lower():
             return QuoteResult(error="tài khoản Anthropic hết credit", fatal=True)
-        return QuoteResult(error=f"bad request: {e.message}")
-    except anthropic.RateLimitError:
-        return QuoteResult(error="rate limited")
-    except anthropic.APIStatusError as e:
-        return QuoteResult(error=f"API error {e.status_code}: {e.message}")
-    except anthropic.APIConnectionError as e:
-        return QuoteResult(error=f"lỗi mạng: {e.__class__.__name__}")
-    text = "".join(b.text for b in resp.content if b.type == "text")
-    if resp.stop_reason == "refusal":
+        if e.status == 400:
+            return QuoteResult(error=f"bad request: {e.message}")
+        if e.status == 429:
+            return QuoteResult(error="rate limited")
+        return QuoteResult(error=f"API error {e.status}: {e.message}")
+    except claude_http.TransportError as e:
+        return QuoteResult(error=str(e))
+    blocks = resp.get("content")
+    if not isinstance(blocks, list):
+        return QuoteResult(error="Claude trả dữ liệu không hợp lệ.", model=model)
+    text = "".join(b["text"] for b in blocks if isinstance(b, dict)
+                   and b.get("type") == "text" and isinstance(b.get("text"), str))
+    if resp.get("stop_reason") == "refusal":
         return QuoteResult(error="model từ chối", model=model)
     if not text.strip():
-        return QuoteResult(error=f"không có câu trả lời ({resp.stop_reason})", model=model)
+        return QuoteResult(error=f"không có câu trả lời ({resp.get('stop_reason')})", model=model)
     quote, conf = parse(text)
-    return QuoteResult(quote=quote, confidence=conf, model=getattr(resp, "model", model) or model)
+    return QuoteResult(quote=quote, confidence=conf, model=resp.get("model") or model)
 
 
 def read_quote(src: Path, tone: str) -> QuoteResult:

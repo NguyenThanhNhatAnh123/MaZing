@@ -1,5 +1,10 @@
 # Production at mz.eagleglobal2023.com
 
+Quote reading uses the official HTTPS Messages API through Python's standard
+library. It does not load the Anthropic SDK or its native `jiter` parser, which
+Windows App Control can block after a reboot. Keep Windows code-integrity policy
+enabled; `tools/test_ocr.py` covers operation with native SDK imports blocked.
+
 ## Dashboard login
 
 The public dashboard requires the shared MaZing account. Login sessions last

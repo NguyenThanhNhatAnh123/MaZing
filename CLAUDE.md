@@ -70,6 +70,7 @@ production.py: threaded Waitress server behind Cloudflare Tunnel.
 deploy/: CI-approved main release supervisor, health checks, drain and rollback.
 lib/browser_bridge.py: paired relay with exactly-once dispatch.
 lib/web_auth.py + lib/login.html: shared-account login, CSRF form and persistent 30-day sessions.
+lib/claude_http.py: standard-library HTTPS Messages transport; no native Anthropic SDK/parser dependency.
 lib/mayzing.py: fixed API operations and normal Chrome launcher.
 lib/product_defaults.py: product choices and clone type matching.
 lib/artwork.py, lib/ocr.py, lib/titles.py, lib/slug.py, lib/review.py: preparation and review.
