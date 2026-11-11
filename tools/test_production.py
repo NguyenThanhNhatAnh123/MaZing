@@ -485,6 +485,47 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(info["settings"]["extra_tags"], [])
         self.assertEqual(self.info(self.a)["settings"]["extra_tags"], ["private-a"])
 
+    def test_upload_start_rejections_are_logged_and_explain_automation(self):
+        with self.assertLogs("dashboard", level="INFO") as captured:
+            rejected = self.post(self.a, "/api/upload/start", {"batch": "not-started"})
+            anonymous = self.post(dashboard.app.test_client(), "/api/upload/start")
+        self.assertEqual(rejected.status_code, 409)
+        self.assertTrue(rejected.get_json()["automation_required"])
+        self.assertFalse(rejected.get_json()["browser"]["automation"])
+        self.assertEqual(anonymous.status_code, 401)
+        self.assertTrue(any("Upload start response workspace=" in line and "status=409" in line
+                            for line in captured.output))
+        self.assertTrue(any("workspace=unbound status=401" in line for line in captured.output))
+
+    def test_upload_start_acknowledges_a_job_before_artwork_processing(self):
+        from lib import manifest
+        import upload_batch
+        runtime = self.runtime(self.a)
+        with self.scope(self.a):
+            manifest.write("offline-upload", [{"filename": "fixture.png", "slug": "fixture",
+                                               "title": "Fixture", "status": "pending"}])
+
+        def fake_upload(batch, **kwargs):
+            self.assertEqual(batch, "offline-upload")
+            kwargs["say"]("Fake artwork processing")
+            return {"done": 1}
+
+        with patch.object(runtime.bridge, "status", return_value={"automation": True}), \
+             patch.object(upload_batch, "run", side_effect=fake_upload) as upload, \
+             self.assertLogs("dashboard", level="INFO") as captured:
+            response = self.post(self.a, "/api/upload/start", {"batch": "offline-upload"})
+            finished = self.finish_job(self.a)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["job_id"])
+        self.assertEqual(response.get_json()["job_id"], finished["job_id"])
+        self.assertIn("Đã nhận yêu cầu upload batch offline-upload", finished["lines"][0])
+        self.assertTrue(any("Fake artwork processing" in line for line in finished["lines"]))
+        upload.assert_called_once()
+        self.assertTrue(any("Upload start accepted" in line and "batch=offline-upload" in line
+                            for line in captured.output))
+        self.assertTrue(any("Upload start response" in line and "status=200" in line
+                            for line in captured.output))
+
     def test_health_sets_no_cookie_and_counts_jobs_across_every_runtime(self):
         anonymous = dashboard.app.test_client()
         response = self.get(anonymous, "/api/health")

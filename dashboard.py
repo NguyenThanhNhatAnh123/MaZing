@@ -70,7 +70,9 @@ class Job:
         self.lock = threading.Lock()
         self.kind = ""
         self.running = False
+        self.id = secrets.token_hex(12)
         self.lines: list[str] = []
+        self.total_lines = 0
         self.progress = (0, 0)
         self.result: dict = {}
         self.started = 0.0
@@ -81,6 +83,7 @@ class Job:
         with self.lock:
             for line in str(msg).splitlines() or [""]:
                 self.lines.append(f"{stamp} {line}")
+                self.total_lines += 1
             del self.lines[:-2000]
 
     def start(self, kind: str, fn) -> bool:
@@ -88,6 +91,8 @@ class Job:
             if self.running or config.DRAIN_FILE.exists():
                 return False
             self.kind, self.running, self.lines, self.progress, self.result = kind, True, [], (0, 0), {}
+            self.id = secrets.token_hex(12)
+            self.total_lines = 0
             # Publish the running flag before the final drain check: a deploy health
             # check can then either see this job or prevent it from starting.
             if config.DRAIN_FILE.exists():
@@ -115,17 +120,24 @@ class Job:
                 self.result = {"error": str(e)}
             finally:
                 BRIDGE_GENERATION.reset(generation_token)
+                self.say(f"--- kết thúc ({round(time.time() - self.started)} giây) ---")
                 with self.lock:
                     self.running = False
-                self.say(f"--- kết thúc ({round(time.time() - self.started)} giây) ---")
         generation = BRIDGE.generation
         threading.Thread(target=bind_context(body), daemon=True, name=f"job-{kind}").start()
         return True
 
-    def as_json(self, since: int = 0) -> dict:
+    def as_json(self, since: int = 0, job_id: str | None = None) -> dict:
         with self.lock:
-            return {"kind": self.kind, "running": self.running, "total_lines": len(self.lines),
-                    "lines": self.lines[since:], "progress": list(self.progress), "result": self.result,
+            first_line = self.total_lines - len(self.lines)
+            # A new job may already contain more lines than the previous job.
+            # Its identity, rather than a smaller buffer, invalidates the old cursor.
+            if job_id is not None and job_id != self.id:
+                since = 0
+            start = max(first_line, min(self.total_lines, max(0, since)))
+            return {"job_id": self.id, "kind": self.kind, "running": self.running,
+                    "first_line": first_line, "total_lines": self.total_lines,
+                    "lines": self.lines[start - first_line:], "progress": list(self.progress), "result": self.result,
                     "started": self.started}
 
 
@@ -319,6 +331,11 @@ def bind_device_request():
 
 @app.after_request
 def private_response(response):
+    if request.method == "POST" and request.path == "/api/upload/start":
+        # Record rejected requests too, without credentials or artwork metadata.
+        runtime = RUNTIME.get()
+        log.info("Upload start response workspace=%s status=%s",
+                 runtime.workspace_id if runtime is not None else "unbound", response.status_code)
     if (RUNTIME.get() is not None or request.path.startswith("/api/")
             or request.path in ("/", "/login", "/logout")):
         response.headers["Cache-Control"] = "private, no-store"
@@ -523,7 +540,7 @@ def api_info():
 
 @app.get("/api/job")
 def api_job():
-    return jsonify(JOB.as_json(int(request.args.get("since", 0) or 0)))
+    return jsonify(JOB.as_json(int(request.args.get("since", 0) or 0), request.args.get("job_id")))
 
 
 # ---------------------------------------------------------------------------
@@ -782,7 +799,8 @@ def api_batch_log(batch: str):
 def api_upload_start():
     _bridge_request(local_only=True)
     if not BRIDGE.status()["automation"]:
-        return jsonify({"error": mayzing.AUTOMATION_DISABLED}), 409
+        return jsonify({"error": mayzing.AUTOMATION_DISABLED, "automation_required": True,
+                        "browser": BRIDGE.status()}), 409
     body = request.get_json(silent=True) or {}
     batch = _batch_name(body.get("batch", ""))
     retry = bool(body.get("retry_errors"))
@@ -790,6 +808,7 @@ def api_upload_start():
     dry = bool(body.get("dry_run"))
 
     def run():
+        JOB.say(f"Đã nhận yêu cầu upload batch {batch}. Đang kiểm tra shop và dữ liệu.")
         import upload_batch
         res = upload_batch.run(batch, retry_errors=retry, publish=None if publish is None else bool(publish),
                                dry_run=dry, say=JOB.say)
@@ -797,7 +816,9 @@ def api_upload_start():
         return res
     if not JOB.start("upload", run):
         return busy_response()
-    return jsonify({"ok": True})
+    log.info("Upload start accepted workspace=%s batch=%s job=%s",
+             WORKSPACE_ID.get() or "local", batch, JOB.id)
+    return jsonify({"ok": True, "job_id": JOB.id})
 
 
 @app.post("/api/publish")

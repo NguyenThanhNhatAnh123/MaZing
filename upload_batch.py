@@ -30,6 +30,7 @@ from lib import manifest, mayzing, product_defaults
 from lib.context import WORKSPACE_ID
 
 log = logging.getLogger("upload")
+WAIT_LOG_INTERVAL_S = 30
 
 
 def setup_logging(batch: str) -> logging.Handler:
@@ -334,15 +335,25 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
     # Task-status reads may fail even after the mutation created every campaign.
     # Keep the submitted journal and inspect the actual groups; never clone again.
     last_progress = {}
+    last_report = {}
+    task_started = {}
     status_unavailable = False
 
     def progress(t: dict) -> None:
-        p = ((t.get("summary") or {}).get("progress"))
-        if isinstance(p, (int, float)) and p != last_progress.get(t.get("id")):
-            last_progress[t.get("id")] = p
-            tell(f"  task {t.get('id')}: {t.get('status')} {round(p * 100)}%")
+        task_id = t.get("id") or task["id"]
+        p = (t.get("summary") or {}).get("progress")
+        state = (t.get("status") or "đang chờ", p if isinstance(p, (int, float)) else None)
+        now = time.monotonic()
+        if state != last_progress.get(task_id) or now - last_report.get(task_id, now) >= WAIT_LOG_INTERVAL_S:
+            last_progress[task_id] = state
+            last_report[task_id] = now
+            percent = f" {round(state[1] * 100)}%" if state[1] is not None else ""
+            elapsed = int(now - task_started[task_id])
+            tell(f"  task {task_id}: {state[0]}{percent} (đã chờ {elapsed} giây)")
 
     for task in tasks:
+        task_started[task["id"]] = time.monotonic()
+        tell(f"  task {task['id']}: chờ Mayzing xử lý (tối đa {config.CLONE_TASK_TIMEOUT_S} giây).")
         try:
             result = mz.wait_task(task["id"], on_progress=progress)
         except mayzing.SessionExpired:
@@ -365,11 +376,16 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
 
     # 3) new campaigns
     new_groups: list[dict] = []
-    deadline = time.time() + 60
+    started = last_reported = time.monotonic()
+    deadline = started + 60
     while True:
         new_groups = [g for g in mz.groups(store) if g["id"] not in before]
-        if len(new_groups) >= len(uploaded) or time.time() > deadline:
+        now = time.monotonic()
+        if len(new_groups) >= len(uploaded) or now > deadline:
             break
+        if now - last_reported >= WAIT_LOG_INTERVAL_S:
+            tell(f"  chờ campaign mới: tìm thấy {len(new_groups)}/{len(uploaded)} (đã chờ {int(now - started)} giây).")
+            last_reported = now
         time.sleep(config.CLONE_POLL_S)
     matched = match_new_groups(uploaded, new_groups, exact_only=status_unavailable)
     if len(new_groups) and len(matched) < len(uploaded):
@@ -390,7 +406,7 @@ def _clone_chunk(mz, store, domain, origin, chunk, extra_tags, out_dir, tell, fa
 
 def _finish_group(mz, store, domain, r, g, extra_tags, tell, fail, save, summary) -> None:
     try:
-        g = _wait_ready(mz, store, g)
+        g = _wait_ready(mz, store, g, tell)
         state = json.loads(r.get("clone_state") or "{}")
         expected = state.get("expected_product_count") or 0
         if expected or state.get("task_status_unavailable") or state.get("require_complete_products"):
@@ -420,11 +436,18 @@ def _finish_group(mz, store, domain, r, g, extra_tags, tell, fail, save, summary
     save()
 
 
-def _wait_ready(mz, store: str, g: dict) -> dict:
-    deadline = time.time() + config.GROUP_READY_TIMEOUT_S
-    while g.get("processing") and time.time() < deadline:
+def _wait_ready(mz, store: str, g: dict, tell=None) -> dict:
+    started = last_reported = time.monotonic()
+    deadline = started + config.GROUP_READY_TIMEOUT_S
+    if g.get("processing") and tell:
+        tell(f"  campaign /{g.get('slug') or g['id']}: chờ Mayzing xử lý sản phẩm (tối đa {config.GROUP_READY_TIMEOUT_S} giây).")
+    while g.get("processing") and time.monotonic() < deadline:
         time.sleep(config.CLONE_POLL_S)
         g = mz.group(store, g["id"]) or g
+        now = time.monotonic()
+        if g.get("processing") and tell and now - last_reported >= WAIT_LOG_INTERVAL_S:
+            tell(f"  campaign /{g.get('slug') or g['id']}: vẫn đang xử lý sản phẩm (đã chờ {int(now - started)} giây).")
+            last_reported = now
     if g.get("processing"):
         raise mayzing.MayzingError("campaign còn đang xử lý; thử tiếp tục sau, tool sẽ không clone lại")
     return g

@@ -164,6 +164,33 @@ class UploadRecoveryTests(unittest.TestCase):
         self.assertEqual(self.fake.clone_calls, 1)
         self.assertTrue(all(manifest.is_done(r) for r in manifest.read("batch")))
 
+    def test_task_wait_reports_missing_and_unchanged_progress_without_flooding(self):
+        clock = {"now": 0}
+        messages = []
+
+        def wait_task(task_id, on_progress=None):
+            self.fake.waited.append(task_id)
+            started = clock["now"]
+            for elapsed, status, percent in ((0, "PENDING", None), (8, "PENDING", None),
+                    (30, "PENDING", None), (34, "RUNNING", None), (40, "RUNNING", None),
+                    (60, "RUNNING", 0), (64, "RUNNING", 0), (94, "RUNNING", 0)):
+                clock["now"] = started + elapsed
+                on_progress({"id": task_id, "status": status, "summary": {"progress": percent}})
+            return {"id": task_id, "status": "SUCCEEDED", "summary": {"succeeded": 1}}
+
+        self.fake.wait_task = wait_task
+        with patch.object(upload_batch.time, "monotonic", side_effect=lambda: clock["now"]):
+            result = self.run_batch(say=messages.append)
+        self.assertEqual(result["done"], 2)
+        self.assertEqual(self.fake.clone_calls, 1)
+        for task_id in self.fake.waited:
+            updates = [m for m in messages if f"task {task_id}:" in m and "đã chờ" in m]
+            self.assertEqual(len(updates), 5)
+            self.assertTrue(any("PENDING (đã chờ 0 giây)" in m for m in updates))
+            self.assertTrue(any("PENDING (đã chờ 30 giây)" in m for m in updates))
+            self.assertTrue(any("RUNNING (đã chờ 34 giây)" in m for m in updates))
+            self.assertTrue(any("RUNNING 0% (đã chờ 94 giây)" in m for m in updates))
+
     def test_status_query_error_reconciles_all_existing_campaigns(self):
         self.fake.reject_task_reads = True
         messages = []
@@ -183,12 +210,34 @@ class UploadRecoveryTests(unittest.TestCase):
     def test_task_query_error_with_missing_groups_never_reclones(self):
         self.fake.reject_task_reads = True
         self.fake.hide_new = True
-        with patch.object(upload_batch, 'time', Mock(time=Mock(side_effect=[0, 61]))):
+        with patch.object(upload_batch.time, 'monotonic', side_effect=[0, 0, 0, 61]):
             result = self.run_batch()
         self.assertEqual(result['errors'], 2)
         self.assertFalse(self.fake.updates)
         self.assertEqual(self.run_batch(retry_errors=True)['errors'], 2)
         self.assertEqual(self.fake.clone_calls, 1)
+
+    def test_campaign_discovery_reports_wait_without_submitting_clone_again(self):
+        clock = {"now": 0}
+        messages = []
+        groups = self.fake.groups
+
+        def delayed_groups(store):
+            found = groups(store)
+            if self.fake.clone_calls and clock["now"] < 40:
+                return [g for g in found if g["id"] == "origin"]
+            return found
+
+        def sleep(seconds):
+            clock["now"] += seconds
+
+        self.fake.groups = delayed_groups
+        with patch.object(upload_batch.time, "monotonic", side_effect=lambda: clock["now"]), \
+                patch.object(upload_batch.time, "sleep", side_effect=sleep):
+            result = self.run_batch(say=messages.append)
+        self.assertEqual(result["done"], 2)
+        self.assertEqual(self.fake.clone_calls, 1)
+        self.assertTrue(any("chờ campaign mới: tìm thấy 0/2" in m for m in messages))
 
     def test_task_query_error_waits_for_campaign_processing_before_updates(self):
         self.fake.reject_task_reads = True
@@ -281,6 +330,52 @@ class UploadRecoveryTests(unittest.TestCase):
         self.assertEqual(self.run_batch()['errors'], 2)
         self.assertEqual(self.fake.clone_calls, 0)
         self.assertFalse(self.fake.images)
+
+
+class CampaignWaitTests(unittest.TestCase):
+    def test_readiness_reports_ongoing_processing_every_30_seconds(self):
+        clock = {"now": 0}
+        messages = []
+        group = {"id": "group-1", "slug": "new-campaign", "processing": True}
+        ready = {**group, "processing": False}
+        client = Mock()
+        client.group.side_effect = [group] * 6 + [ready]
+
+        def sleep(seconds):
+            clock["now"] += seconds
+
+        with patch.object(upload_batch.time, "monotonic", side_effect=lambda: clock["now"]), \
+                patch.object(upload_batch.time, "sleep", side_effect=sleep), \
+                patch.object(config, "CLONE_POLL_S", 10):
+            result = upload_batch._wait_ready(client, "TEST", group, messages.append)
+        self.assertIs(result, ready)
+        self.assertEqual(client.group.call_count, 7)
+        self.assertEqual(len(messages), 3)
+        self.assertIn("chờ Mayzing xử lý sản phẩm", messages[0])
+        self.assertIn("đã chờ 30 giây", messages[1])
+        self.assertIn("đã chờ 60 giây", messages[2])
+        self.assertEqual({call[0] for call in client.method_calls}, {"group"})
+
+    def test_readiness_timeout_uses_monotonic_clock_and_preserves_stop(self):
+        clock = {"now": 0}
+        messages = []
+        group = {"id": "group-1", "slug": "new-campaign", "processing": True}
+        client = Mock()
+        client.group.return_value = group
+
+        def sleep(seconds):
+            clock["now"] += seconds
+
+        with patch.object(upload_batch.time, "monotonic", side_effect=lambda: clock["now"]), \
+                patch.object(upload_batch.time, "time", side_effect=AssertionError("wall clock must not control waits")), \
+                patch.object(upload_batch.time, "sleep", side_effect=sleep), \
+                patch.object(config, "GROUP_READY_TIMEOUT_S", 60), \
+                patch.object(config, "CLONE_POLL_S", 10):
+            with self.assertRaisesRegex(mayzing.MayzingError, "tool sẽ không clone lại"):
+                upload_batch._wait_ready(client, "TEST", group, messages.append)
+        self.assertEqual(client.group.call_count, 6)
+        self.assertTrue(any("đã chờ 30 giây" in m for m in messages))
+        self.assertEqual({call[0] for call in client.method_calls}, {"group"})
 
 
 if __name__ == "__main__":

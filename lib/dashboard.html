@@ -467,29 +467,55 @@
   const JOB_LABELS = {prep: "Prep", upload: "Upload", login: "Đăng nhập", publish: "Publish", first_product: "Sản phẩm mặc định"};
   let INFO = {settings: {}}, ITEMS = [], CAMPAIGNS = [], STORES = [], BATCHES = [];
   let view = "input", filter = "all", jobSince = 0, lastRunning = false, jobRunning = false, focusUid = null;
-  let lastFinishedJob = 0;
+  let lastFinishedJob = "", jobId = "", jobPolling = false;
   let browserEnabling = false;
 
   async function api(path, body, method) {
     const o = {credentials: "same-origin"};
     if (body instanceof FormData) { o.method = "POST"; o.body = body; }
     else if (body !== undefined) { o.method = method || "POST"; o.headers = {"content-type": "application/json"}; o.body = JSON.stringify(body); }
-    let r;
-    try { r = await fetch(path, o); }
+    else if (method) o.method = method;
+    const mutation = !["GET", "HEAD", "OPTIONS"].includes((o.method || "GET").toUpperCase());
+    const endpoint = String(path).split(/[?#]/, 1)[0].replace(/^\/+/, "");
+    const timeoutMs = ["api/upload/start", "api/job", "api/browser/status", "api/info", "api/batches"].includes(endpoint) ? 20000 : 180000;
+    const controller = new AbortController();
+    o.signal = controller.signal;
+    let timer, timedOut = false;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+        reject(new Error("Dashboard response timed out"));
+      }, timeoutMs);
+    });
+    try {
+      return await Promise.race([deadline, (async () => {
+        const r = await fetch(path, o);
+        if (controller.signal.aborted) throw new Error("Request aborted");
+        let data = {};
+        try { data = await r.json(); }
+        catch (e) {
+          if (controller.signal.aborted || e.name === "TypeError") throw e;
+          data = {error: `Máy chủ trả HTTP ${r.status}, không phải JSON. Kiểm tra kết nối hoặc tải lại dashboard.`};
+        }
+        if (controller.signal.aborted) throw new Error("Request aborted");
+        setOffline(false);
+        if (!data || typeof data !== "object" || Array.isArray(data)) data = {error: "Phản hồi dashboard không hợp lệ (HTTP " + r.status + ")."};
+        if (r.status === 401 && data.auth_required) {
+          location.replace("/login?next=" + encodeURIComponent(location.pathname + location.search));
+          return data;
+        }
+        if (!r.ok && !data.error) data.error = "HTTP " + r.status;
+        return data;
+      })()]);
+    }
     catch (e) {
       setOffline(true);
-      return {error: "Không kết nối được dashboard MaZing. Kiểm tra mạng rồi tải lại trang. Nếu dùng bản local, kiểm tra run_dashboard.bat đang chạy.", offline: true};
+      const error = timedOut ? `Dashboard chưa phản hồi sau ${timeoutMs / 1000} giây.` : "Không kết nối được dashboard MaZing. Kiểm tra mạng hoặc tải lại trang.";
+      return {error: error + (mutation ? " Lệnh có thể đã được máy chủ nhận. Mở log và kiểm tra tác vụ trước khi thử lại." : " Kiểm tra kết nối rồi thử tải lại."),
+        offline: true, timeout: timedOut, request_uncertain: mutation};
     }
-    setOffline(false);
-    let data = {};
-    try { data = await r.json(); } catch (e) { data = {error: `Máy chủ trả HTTP ${r.status}, không phải JSON. Kiểm tra kết nối hoặc tải lại dashboard.`}; }
-    if (!data || typeof data !== "object" || Array.isArray(data)) data = {error: "Phản hồi dashboard không hợp lệ (HTTP " + r.status + ")."};
-    if (r.status === 401 && data.auth_required) {
-      location.replace("/login?next=" + encodeURIComponent(location.pathname + location.search));
-      return data;
-    }
-    if (!r.ok && !data.error) data.error = "HTTP " + r.status;
-    return data;
+    finally { clearTimeout(timer); }
   }
   let offline = false;
   function setOffline(v) {
@@ -1106,6 +1132,7 @@
   };
 
   // ---------- batches ----------
+  const batchStartErrors = new Map();
   function statusBadge(st) {
     st = st || "pending";
     if (st === "done") return `<span class="badge done">done</span>`;
@@ -1124,6 +1151,9 @@
     const running = jobRunning;
     box.innerHTML = BATCHES.map(b => {
       const c = b.counts;
+      const pendingHint = c.pending && !running ? ((INFO.browser || {}).automation
+        ? "Chờ upload. Bấm Upload → Bắt đầu upload."
+        : "Vào Mayzing → Kết nối Chrome → Bật tự động upload.") : "";
       return `<div class="panel" data-batch="${esc(b.batch)}">
         <div class="batch-head">
           <span class="nm">${esc(b.batch)}</span>
@@ -1136,6 +1166,8 @@
             <button class="btn sm bad act-delete" ${running ? "disabled" : ""}><svg><use href="#i-trash"/></svg>Xoá</button>
           </span>
         </div>
+        ${pendingHint ? `<p class="desc">${pendingHint}</p>` : ""}
+        ${batchStartErrors.has(b.batch) ? `<p class="note bad" role="alert">${esc(batchStartErrors.get(b.batch))}</p>` : ""}
         <table class="rows"><colgroup><col class="c-thumb"><col class="c-slug"><col><col class="c-origin"><col class="c-status"><col class="c-act"></colgroup>
         <thead><tr><th></th><th>URL</th><th>Tiêu đề</th><th>Origin</th><th>Trạng thái</th><th></th></tr></thead><tbody>
         ${b.rows.map(r => `<tr>
@@ -1160,18 +1192,39 @@
   $("#up-publish").addEventListener("change", saveUploadOptions);
   function bindBatch(p, b) {
     const name = b.batch, s = INFO.settings || {};
+    const startFailed = r => {
+      batchStartErrors.set(name, r.error);
+      const dialogError = $("#upload-start-error");
+      if (dialogError) { dialogError.textContent = r.error; dialogError.hidden = false; }
+      if (r.automation_required && r.browser) {
+        INFO.browser = r.browser;
+        renderBrowserState();
+      }
+      renderBatches();
+      if (r.request_uncertain) { showLog(); pollJob(); }
+      toast(r.error, 6000);
+      return false;
+    };
+    const startAccepted = () => {
+      if (batchStartErrors.delete(name)) renderBatches();
+      showLog(); pollJob();
+    };
     const start = (retry, dry) => {
       const c = b.counts;
       const n = retry ? c.pending + c.error : c.pending;
-      if (dry) return api("api/upload/start", {batch: name, dry_run: true, retry_errors: true}).then(r => { if (r.error) toast(r.error, 4000); else { toast("Đang kiểm tra… xem log"); showLog(); pollJob(); } });
+      if (dry) return api("api/upload/start", {batch: name, dry_run: true, retry_errors: true}).then(r => {
+        if (r.error) return startFailed(r);
+        toast("Đang kiểm tra… xem log"); startAccepted();
+      });
       modal(`<h2><svg><use href="#i-cloud"/></svg>Upload batch ${esc(name)} lên <span style="font-family:var(--mono)">${esc(s.store_domain || s.store_name || s.store_slug || "?")}</span></h2>
         <p>Tool tải ${n} artwork lên Artwork library, chạy <b>Bulk clone</b> từ campaign gốc của từng dòng, rồi đặt tên + URL cho từng campaign mới. Mỗi dòng thành công = <b>1 campaign thật</b> trên store ${esc(s.store_name || "")}.
         ${retry ? "<br>Bao gồm cả các dòng đang lỗi." : ""}${(s.extra_tags || []).length ? `<br>Tags thêm: ${esc(s.extra_tags.join(", "))}` : ""}</p>
+        <p class="note bad" id="upload-start-error" role="alert" hidden></p>
         <label class="chk"><input type="checkbox" id="m-publish"${s.auto_publish ? " checked" : ""}> Bấm "Publish changes" khi xong (đưa thay đổi của store lên web)</label>`,
         async () => {
           const r = await api("api/upload/start", {batch: name, retry_errors: retry, publish: $("#m-publish").checked});
-          if (r.error) { toast(r.error, 5000); return false; }
-          toast("Đang upload… xem log"); showLog(); pollJob();
+          if (r.error) return startFailed(r);
+          toast("Đang upload… xem log"); startAccepted();
         }, "Bắt đầu upload");
     };
     $(".act-upload", p).onclick = () => start(false, false);
@@ -1207,53 +1260,60 @@
 
   // ---------- job ----------
   async function pollJob() {
-    const j = await api(`api/job?since=${jobSince}`);
-    if (j.error) { if (j.offline) $("#job-label").textContent = "mất kết nối dashboard"; return; }
-    const log = $("#drawer-log");
-    if (j.total_lines < jobSince) { jobSince = 0; log.textContent = ""; return pollJob(); }
-    const EMPTY = "(chưa có log)";
-    if (j.lines.length) {
-      const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
-      const old = log.textContent === EMPTY ? "" : log.textContent;
-      log.textContent = (old ? old + "\n" : "") + j.lines.join("\n"); jobSince = j.total_lines;
-      if (atBottom) log.scrollTop = log.scrollHeight;
-    }
-    if (!log.textContent) log.textContent = EMPTY;
-    const label = JOB_LABELS[j.kind] || j.kind;
-    const err = j.result && j.result.error;
-    jobRunning = j.running;
-    const pill = $("#job-pill");
-    pill.className = "pill " + (j.running ? "run" : j.kind ? (err ? "err" : "ok") : "");
-    pill.lastElementChild.textContent = j.running ? label + "…" : j.kind ? (err ? "lỗi: " + err : "xong: " + label) : "rảnh";
-    $("#job-label").textContent = j.running ? label + " đang chạy" : j.kind ? (err ? "Lỗi - xem log" : "Xong - " + label) : "không có job";
-    $("#drawer-title").textContent = j.kind ? "Log job: " + label : "Log job";
-    const pr = $("#job-progress"), [n, t] = j.progress || [0, 0];
-    pr.style.display = j.running && t ? "" : "none";
-    if (t) $("i", pr).style.width = Math.round(100 * n / t) + "%";
-    $("#btn-login-cancel").style.display = j.running && j.kind === "login" ? "" : "none";
-    renderBrowserState();
-    if (j.running !== lastRunning) {
-      if (view === "batches") renderBatches();
-      loadInputs();
-    }
-    if (!j.running && j.kind && j.started && j.started !== lastFinishedJob) {
-      lastFinishedJob = j.started;
-      if (err) { toast("Job lỗi: " + err, 6000); showLog(); }
-      if (j.result && (j.result.login || j.result.verification)) {
-        INFO.session = {...(INFO.session || {}), ok: false, verification: !!j.result.verification};
-        $("#session-result").className = "note bad";
-        $("#session-result").textContent = err || "Chưa đăng nhập";
-        renderInfo(); renderMayzing();
+    // Keep one request in flight so a slow response cannot roll back the cursor.
+    if (jobPolling) return;
+    jobPolling = true;
+    try {
+      const j = await api(`api/job?since=${jobSince}&job_id=${encodeURIComponent(jobId)}`);
+      if (j.error) { if (j.offline) $("#job-label").textContent = "mất kết nối dashboard"; return; }
+      const log = $("#drawer-log");
+      const currentJobId = j.job_id || String(j.started || "");
+      if (currentJobId !== jobId) { jobId = currentJobId; jobSince = 0; log.textContent = ""; }
+      const EMPTY = "(chưa có log)";
+      if (j.lines.length) {
+        const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+        const old = log.textContent === EMPTY ? "" : log.textContent;
+        log.textContent = (old ? old + "\n" : "") + j.lines.join("\n");
+        if (atBottom) log.scrollTop = log.scrollHeight;
       }
-      if (j.kind === "prep") { await loadItems(); if (!err) { toast("Prep xong - duyệt design"); show("review"); } }
-      else if (j.kind === "upload") { await loadBatches(); if (!err) toast("Upload xong"); loadCampaigns(true); }
-      else if (j.kind === "login") {
-        closeModal();
-        if (j.result && j.result.ok) checkSession(true);
-        else if (j.result && j.result.cancelled) toast("Đã dừng đăng nhập. Bạn có thể bấm mở Chrome lại.");
+      jobSince = j.total_lines;
+      if (!log.textContent) log.textContent = EMPTY;
+      const label = JOB_LABELS[j.kind] || j.kind;
+      const err = j.result && j.result.error;
+      jobRunning = j.running;
+      const pill = $("#job-pill");
+      pill.className = "pill " + (j.running ? "run" : j.kind ? (err ? "err" : "ok") : "");
+      pill.lastElementChild.textContent = j.running ? label + "…" : j.kind ? (err ? "lỗi: " + err : "xong: " + label) : "rảnh";
+      $("#job-label").textContent = j.running ? label + " đang chạy" : j.kind ? (err ? "Lỗi - xem log" : "Xong - " + label) : "không có job";
+      $("#drawer-title").textContent = j.kind ? "Log job: " + label : "Log job";
+      const pr = $("#job-progress"), [n, t] = j.progress || [0, 0];
+      pr.style.display = j.running && t ? "" : "none";
+      if (t) $("i", pr).style.width = Math.round(100 * n / t) + "%";
+      $("#btn-login-cancel").style.display = j.running && j.kind === "login" ? "" : "none";
+      renderBrowserState();
+      if (j.running !== lastRunning) {
+        if (view === "batches") renderBatches();
+        loadInputs();
       }
-    }
-    lastRunning = j.running;
+      if (!j.running && j.kind && j.started && currentJobId !== lastFinishedJob) {
+        lastFinishedJob = currentJobId;
+        if (err) { toast("Job lỗi: " + err, 6000); showLog(); }
+        if (j.result && (j.result.login || j.result.verification)) {
+          INFO.session = {...(INFO.session || {}), ok: false, verification: !!j.result.verification};
+          $("#session-result").className = "note bad";
+          $("#session-result").textContent = err || "Chưa đăng nhập";
+          renderInfo(); renderMayzing();
+        }
+        if (j.kind === "prep") { await loadItems(); if (!err) { toast("Prep xong - duyệt design"); show("review"); } }
+        else if (j.kind === "upload") { await loadBatches(); if (!err) toast("Upload xong"); loadCampaigns(true); }
+        else if (j.kind === "login") {
+          closeModal();
+          if (j.result && j.result.ok) checkSession(true);
+          else if (j.result && j.result.cancelled) toast("Đã dừng đăng nhập. Bạn có thể bấm mở Chrome lại.");
+        }
+      }
+      lastRunning = j.running;
+    } finally { jobPolling = false; }
   }
   setInterval(pollJob, 1500);
 
